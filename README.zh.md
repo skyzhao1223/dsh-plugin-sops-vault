@@ -95,6 +95,8 @@ DSH web server 上的一个前缀路由；所有响应都是 `{ok, data|error}` 
 写入 `<vaultDir>/.git/dsh-vault-audit.log`（放 `.git/` 里所以不影响 git 状态；非 git 库回退到
 `<vaultDir>/.audit.log`）。**日志绝不含值。** 审计弹窗里能看尾部记录。
 
+注意：DSH 的页面 token 只保护应用外壳，**不覆盖**插件注册的 `webServer` 路由——`/vault-api` 对任何本地调用者无需 token 即可达（实测确认）。它的防线是 Origin 策略 + 回环绑定。
+
 已知边界（如实说明，不假装解决）：DSH web server 默认只绑回环地址，若对外暴露请自行加认证；
 以你的用户身份运行的本地进程本来就能直接读库——这是所有本地密码存储的共同威胁模型；
 DSH GUI 内部若被 XSS，攻击者能以页面身份调 API——爆炸半径与任何页内密码管理器相同。

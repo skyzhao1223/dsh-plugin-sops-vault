@@ -102,6 +102,8 @@ One prefix route on the DSH web server; every response is `{ok, data|error}` JSO
 IP — to `<vaultDir>/.git/dsh-vault-audit.log` (inside `.git/` so git status stays clean; falls back to
 `<vaultDir>/.audit.log` for non-git vaults). **Values are never logged.** The audit modal shows the tail.
 
+Note: the DSH page token gates the app shell, **not** plugin-registered `webServer` routes — `/vault-api` is reachable by any local caller without the token (verified). Its guards are the Origin policy plus loopback binding.
+
 Known limits (documented, not solved): the DSH web server binds loopback by default — if you expose it,
 put authentication in front. Local processes running as your user can read the vault directly; that is
 the pre-existing threat model of any local password store. An XSS inside the DSH GUI could script the
