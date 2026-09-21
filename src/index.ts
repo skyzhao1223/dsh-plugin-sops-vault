@@ -92,13 +92,16 @@ async function readBody(req: IncomingMessage, limit = 64 * 1024): Promise<Record
 /**
  * Mount the `/vault-api` route. Disposal of this plugin fiber unregisters it.
  * @param ctx - root context providing `webServer` and `shell`.
+ * @param config - row config, validated against {@link Config} and passed by
+ *   the Cordis fiber as apply's second argument (NOT `ctx.config` — the Guard
+ *   rejects undeclared context property access).
  */
-export function apply(ctx: Context): void {
-  const config = (ctx as unknown as { config?: VaultPluginConfig }).config ?? {}
-  const vaultDir = resolveDir(config.vaultDir)
-  const sopsBin = config.sopsBin ?? 'sops'
-  const gitBin = config.gitBin ?? 'git'
-  const timeoutMs = config.timeoutMs ?? 15_000
+export function apply(ctx: Context, config?: VaultPluginConfig): void {
+  const cfg = config ?? {}
+  const vaultDir = resolveDir(cfg.vaultDir)
+  const sopsBin = cfg.sopsBin ?? 'sops'
+  const gitBin = cfg.gitBin ?? 'git'
+  const timeoutMs = cfg.timeoutMs ?? 15_000
   const secretsFile = join(vaultDir, 'secrets.yaml')
   const sopsConfigFile = join(vaultDir, '.sops.yaml')
   const logFile = existsSync(join(vaultDir, '.git'))

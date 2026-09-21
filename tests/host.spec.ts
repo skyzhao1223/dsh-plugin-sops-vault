@@ -243,7 +243,7 @@ beforeAll(() => {
     },
   }
   const webServer = { register: (route: CapturedRoute) => { captured.push(route); return () => {} } }
-  plugin.apply({ config: { vaultDir: dir }, shell, webServer } as unknown as Context)
+  plugin.apply({ shell, webServer } as unknown as Context, { vaultDir: dir })
 })
 
 afterAll(() => { rmSync(dir, { recursive: true, force: true }) })

@@ -57,7 +57,7 @@ const shell = {
 }
 const webServer = { register: (r: typeof route) => { route = r; return () => {} } }
 
-plugin.apply({ config: { vaultDir: dir }, shell, webServer } as never)
+plugin.apply({ shell, webServer } as never, { vaultDir: dir })
 check('route registered', route !== null && route.kind === 'prefix' && route.path === '/vault-api')
 
 function mockReq(method: string, url: string, body?: unknown, headers: Record<string, string> = {}): IncomingMessage {
