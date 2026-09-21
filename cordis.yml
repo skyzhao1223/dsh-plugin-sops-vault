@@ -1,0 +1,18 @@
+# Opt-in overlay that mounts dsh-plugin-vault over a `dsh web` composition:
+#
+#   dsh web --patch /path/to/dsh-plugin-vault/cordis.yml
+#
+# The relative path resolves against this file's directory, so the plugin loads
+# straight from a built checkout (run `pnpm build` first). For a published
+# package, replace the name with `dsh-plugin-vault` after installing it into
+# the dsh installation tree.
+#
+# Config keys (all optional):
+#   vaultDir   Vault repository directory        (default: ~/Vault)
+#   vaultBin   vault CLI path                    (default: <vaultDir>/bin/vault)
+#   timeoutMs  per-command timeout               (default: 15000)
+- insert:
+    - id: vault-panel
+      name: './lib/index.js'
+      # config:
+      #   vaultDir: ~/Vault

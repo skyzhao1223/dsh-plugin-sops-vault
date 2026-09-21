@@ -1,0 +1,64 @@
+{
+  "name": "dsh-plugin-vault",
+  "version": "0.1.0",
+  "description": "DeepSeek Harness plugin: manage a local sops+age encrypted credential vault from a sidebar panel. Agents see structure only; plaintext flows only on human click.",
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "types": "./lib/types/client/index.d.ts",
+      "default": "./lib/client.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "README.md",
+    "README.zh.md",
+    "LICENSE",
+    "cordis.yml"
+  ],
+  "dsh": {
+    "client": {
+      "platform": "web"
+    }
+  },
+  "scripts": {
+    "build:types": "tsc -p tsconfig.json",
+    "build:js": "tsc -p tsconfig.json --emitDeclarationOnly false --declaration false --declarationMap false --outDir lib",
+    "build:client": "tsdown",
+    "build": "pnpm build:types && pnpm build:js && pnpm build:client",
+    "test": "vitest run",
+    "verify": "node --experimental-strip-types --no-warnings scripts/verify.ts",
+    "prepack": "pnpm build"
+  },
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "cordis",
+    "sops",
+    "age",
+    "vault",
+    "password-manager",
+    "secrets"
+  ],
+  "license": "MIT",
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1-rc.1"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1-rc.1",
+    "@deepseek-ai/schemastery": "^3.18.1-rc.1",
+    "@types/node": "^24.0.0",
+    "@types/react": "^18.3.12",
+    "react": "^18.3.1",
+    "tsdown": "^0.22.2",
+    "typescript": "^5.9.0",
+    "vitest": "^4.1.10"
+  }
+}
