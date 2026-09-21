@@ -7,7 +7,7 @@
  * mirror the contracts documented in those packages' public `.d.ts` files
  * (ShellExecRequest/ShellRunResult/CollectedOutput, WebRoute).
  *
- * @module dsh-plugin-vault/host/types
+ * @module dsh-plugin-sops-vault/host/types
  */
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
@@ -56,8 +56,10 @@ export interface ShellLike {
 export interface VaultPluginConfig {
   /** Vault directory. Default: `~/Vault`. A leading `~` is expanded. */
   vaultDir?: string
-  /** Vault CLI path. Default: `<vaultDir>/bin/vault`. */
-  vaultBin?: string
+  /** sops binary. Default: `sops` (resolved via PATH). */
+  sopsBin?: string
+  /** git binary. Default: `git` (resolved via PATH). */
+  gitBin?: string
   /** Per-command timeout in ms. Default 15000. */
   timeoutMs?: number
 }

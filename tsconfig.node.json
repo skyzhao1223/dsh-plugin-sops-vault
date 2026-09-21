@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "lib",
+    "declaration": false,
+    "noEmit": false,
+    "composite": false,
+    "incremental": false
+  },
+  "include": ["src/index.ts", "src/host"],
+  "exclude": ["src/client"]
+}

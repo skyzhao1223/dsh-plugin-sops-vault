@@ -1,5 +1,5 @@
 {
-  "name": "dsh-plugin-vault",
+  "name": "dsh-plugin-sops-vault",
   "version": "0.1.0",
   "description": "DeepSeek Harness plugin: manage a local sops+age encrypted credential vault from a sidebar panel. Agents see structure only; plaintext flows only on human click.",
   "type": "module",
@@ -30,7 +30,7 @@
   },
   "scripts": {
     "build:types": "tsc -p tsconfig.json",
-    "build:js": "tsc -p tsconfig.json --emitDeclarationOnly false --declaration false --declarationMap false --outDir lib",
+    "build:js": "tsc -p tsconfig.node.json",
     "build:client": "tsdown",
     "build": "pnpm build:types && pnpm build:js && pnpm build:client",
     "test": "vitest run",

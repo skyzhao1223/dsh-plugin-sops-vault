@@ -3,7 +3,7 @@
  * half. Every call returns the unwrapped `data` payload or throws with the
  * server-provided error message.
  *
- * @module dsh-plugin-vault/client/api
+ * @module dsh-plugin-sops-vault/client/api
  */
 
 const BASE = '/vault-api'

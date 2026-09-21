@@ -1,7 +1,7 @@
 /**
  * Sidebar panel icon for the vault entry (`sidebar.panellist` occupant).
  *
- * @module dsh-plugin-vault/client/VaultIcon
+ * @module dsh-plugin-sops-vault/client/VaultIcon
  */
 import type { PanelIconProps } from './types.ts'
 

@@ -5,7 +5,7 @@
  * mirror `ClientContext` from `@deepseek-ai/dsh-client-runtime/client` and the
  * slots service contract from `@deepseek-ai/dsh-client-ui-slots`.
  *
- * @module dsh-plugin-vault/client/types
+ * @module dsh-plugin-sops-vault/client/types
  */
 import type { ComponentType } from 'react'
 

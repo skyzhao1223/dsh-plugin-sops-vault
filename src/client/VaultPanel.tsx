@@ -1,22 +1,25 @@
 /**
  * The Vault panel: compact entry rows grouped by prefix, a detail drawer with
  * per-field reveal/copy/edit/delete, live TOTP with a countdown ring, entry
- * creation, security audit, and git dirty-state commit — all driven through
- * the same-origin `/vault-api` route of the node half.
+ * creation, security audit + access log, and git dirty-state commit — all
+ * driven through the same-origin `/vault-api` route of the node half.
  *
  * Plaintext secret values are fetched per field on explicit click only and
  * kept in component state (memory), never persisted by this bundle.
  *
- * @module dsh-plugin-vault/client/VaultPanel
+ * @module dsh-plugin-sops-vault/client/VaultPanel
  */
 import { createElement, useCallback, useEffect, useRef, useState } from 'react'
 import type { ChangeEvent, KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react'
 import { api } from './api.ts'
 import type { FieldMeta, TotpResult, VaultMeta } from './api.ts'
 import {
-  chipsOf, encCount, entrySubline, fieldOrder, groupEntries,
+  chipValues, encCount, entrySubline, fieldOrder, groupEntries,
   hueOf, isLinkValue, matchEntry, noteOf, shortName,
 } from './logic.ts'
+import { detectLang, makeT } from './i18n.ts'
+
+const t = makeT(detectLang())
 
 const MASK = '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022'
 
@@ -49,7 +52,7 @@ function Glyph({ n, s = 14 }: { n: string; s?: number }) {
     ...(ICONS[n] ?? []).map(([tag, attrs], i) => createElement(tag, { key: i, ...attrs })))
 }
 
-/* ---------- clipboard + toast helpers ---------- */
+/* ---------- clipboard ---------- */
 
 async function copyText(text: string): Promise<boolean> {
   try {
@@ -90,18 +93,19 @@ function TotpWidget({ name, onCopy }: { name: string; onCopy: (text: string, lab
   const frac = remain > 0 ? Math.max(0, Math.min(1, left / remain)) : 0
   return (
     <div className="vp-totp">
-      <svg width={42} height={42} viewBox="0 0 32 32">
+      <svg width={42} height={42} viewBox="0 0 32 32" aria-hidden="true">
         <circle cx={16} cy={16} r={13} fill="none" stroke="var(--dsw-alias-border-l1,#2a3040)" strokeWidth={3} />
         <circle cx={16} cy={16} r={13} fill="none"
           stroke={left <= 5 ? 'var(--dsw-alias-state-error-primary,#ff5c5c)' : 'var(--dsw-alias-brand-primary,#4c8dff)'}
           strokeWidth={3} strokeLinecap="round" strokeDasharray={81.7} strokeDashoffset={81.7 * (1 - frac)}
           transform="rotate(-90 16 16)" style={{ transition: 'stroke-dashoffset 1s linear' }} />
       </svg>
-      <span className="vp-totp-code" title="点击复制"
-        onClick={() => { if (/^\d+$/.test(code)) void onCopy(code, `${name} 动态码`) }}>
+      <span className="vp-totp-code" title={t('clickToCopy')} role="button" tabIndex={0}
+        onClick={() => { if (/^\d+$/.test(code)) void onCopy(code, `${name} ${t('totpCopyLabel')}`) }}
+        onKeyDown={(e: ReactKeyboardEvent) => { if (e.key === 'Enter' && /^\d+$/.test(code)) void onCopy(code, `${name} ${t('totpCopyLabel')}`) }}>
         {code || '\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7'}
       </span>
-      <span className="vp-totp-left">{left > 0 ? `${String(left)}s 后刷新` : '刷新中…'}</span>
+      <span className="vp-totp-left">{left > 0 ? t('totpRefreshIn', { n: left }) : t('totpRefreshing')}</span>
     </div>
   )
 }
@@ -137,12 +141,12 @@ function FieldRow(props: FieldRowProps) {
     return (
       <div className="vp-f">
         <span className="vp-k" title={k}>{k}</span>
-        <input className="vp-edit-in" value={draft} autoFocus
+        <input className="vp-edit-in" value={draft} autoFocus aria-label={`${n} ${k}`}
           onChange={(e: ChangeEvent<HTMLInputElement>) => setDraft(e.target.value)}
           onKeyDown={(e: ReactKeyboardEvent) => { if (e.key === 'Enter') save(); if (e.key === 'Escape') setEditing(false) }} />
         <div className="vp-facts">
-          <button className="vp-icobtn" title="保存" onClick={save}><Glyph n="check" /></button>
-          <button className="vp-icobtn" title="取消" onClick={() => setEditing(false)}><Glyph n="x" /></button>
+          <button className="vp-icobtn" title={t('save')} aria-label={t('save')} onClick={save}><Glyph n="check" /></button>
+          <button className="vp-icobtn" title={t('cancel')} aria-label={t('cancel')} onClick={() => setEditing(false)}><Glyph n="x" /></button>
         </div>
       </div>
     )
@@ -150,11 +154,15 @@ function FieldRow(props: FieldRowProps) {
 
   let valueNode: ReactNode
   if (shown === null) {
-    valueNode = <span className="vp-v vp-mask" title="点击显示" onClick={() => props.onReveal(n, k)}>{MASK}</span>
+    valueNode = <span className="vp-v vp-mask" title={t('clickToShow')} role="button" tabIndex={0}
+      onClick={() => props.onReveal(n, k)}
+      onKeyDown={(e: ReactKeyboardEvent) => { if (e.key === 'Enter') props.onReveal(n, k) }}>{MASK}</span>
   } else if (isLinkValue(shown)) {
     valueNode = <a className="vp-v vp-a" href={shown} target="_blank" rel="noreferrer">{shown}</a>
   } else {
-    valueNode = <span className="vp-v vp-vclick" title="点击复制" onClick={() => props.onCopy(shown, `${n} · ${k}`)}>{shown}</span>
+    valueNode = <span className="vp-v vp-vclick" title={t('clickToCopy')} role="button" tabIndex={0}
+      onClick={() => props.onCopy(shown, `${n} · ${k}`)}
+      onKeyDown={(e: ReactKeyboardEvent) => { if (e.key === 'Enter') props.onCopy(shown, `${n} · ${k}`) }}>{shown}</span>
   }
 
   return (
@@ -162,24 +170,25 @@ function FieldRow(props: FieldRowProps) {
       <span className="vp-k" title={k}>{f.enc ? <><Glyph n="key" s={10} />{k}</> : k}</span>
       {valueNode}
       <div className="vp-facts">
-        {shown !== null ? <button className="vp-icobtn" title="复制" onClick={() => props.onCopy(shown, `${n} · ${k}`)}><Glyph n="copy" s={12} /></button> : null}
+        {shown !== null ? <button className="vp-icobtn" title={t('clickToCopy')} aria-label={t('clickToCopy')} onClick={() => props.onCopy(shown, `${n} · ${k}`)}><Glyph n="copy" s={12} /></button> : null}
         {f.enc ? (
-          <button className="vp-icobtn" title={revealed !== undefined ? '隐藏' : '显示'}
+          <button className="vp-icobtn" title={revealed !== undefined ? t('hide') : t('show')} aria-label={revealed !== undefined ? t('hide') : t('show')}
             onClick={() => { if (revealed !== undefined) props.onHide(n, k); else props.onReveal(n, k) }}>
             <Glyph n={revealed !== undefined ? 'eyeoff' : 'eye'} s={12} />
           </button>
         ) : null}
-        <button className="vp-icobtn" title="编辑"
+        <button className="vp-icobtn" title={t('edit')} aria-label={t('edit')}
           onClick={() => { setDraft(shown ?? ''); setEditing(true); if (shown === null) props.onReveal(n, k) }}>
           <Glyph n="pencil" s={12} />
         </button>
         {confirmDel ? (
-          <button className="vp-icobtn" title="再点一次确认删除" style={{ color: 'var(--dsw-alias-state-error-primary,#ff5c5c)', opacity: 1 }}
+          <button className="vp-icobtn" title={t('confirmDeleteField')} aria-label={t('confirmDeleteField')}
+            style={{ color: 'var(--dsw-alias-state-error-primary,#ff5c5c)', opacity: 1 }}
             onClick={() => { setConfirmDel(false); props.onDeleteField(n, k) }}>
             <Glyph n="trash" s={12} />
           </button>
         ) : (
-          <button className="vp-icobtn" title="删除字段" onClick={() => setConfirmDel(true)}><Glyph n="trash" s={12} /></button>
+          <button className="vp-icobtn" title={t('deleteField')} aria-label={t('deleteField')} onClick={() => setConfirmDel(true)}><Glyph n="trash" s={12} /></button>
         )}
       </div>
     </div>
@@ -208,32 +217,40 @@ function Drawer(props: DrawerProps) {
   const [fk, setFk] = useState('')
   const [fv, setFv] = useState('')
   const [confirmEntry, setConfirmEntry] = useState(false)
+  const closeRef = useRef<HTMLButtonElement | null>(null)
+
+  useEffect(() => { closeRef.current?.focus() }, [])
 
   const hasTotp = !!(fs.totp && fs.totp.enc)
   const keys = fieldOrder(fs)
   const url = fs.url && !fs.url.enc ? String(fs.url.value ?? '') : ''
-  const chips = chipsOf(fs)
+  const chips = chipValues(fs)
   const note = noteOf(fs)
   const short = shortName(n)
 
   return (
-    <div className="vp-drawer" role="dialog" aria-label={n}>
+    <div className="vp-drawer" role="dialog" aria-modal="true" aria-label={n}>
       <div className="vp-dh">
-        <div className="vp-av" style={{ background: `hsl(${String(hueOf(n))},52%,42%)` }}>{short.slice(0, 1).toUpperCase()}</div>
+        <div className="vp-av" aria-hidden="true" style={{ background: `hsl(${String(hueOf(n))},52%,42%)` }}>{short.slice(0, 1).toUpperCase()}</div>
         <div className="vp-dtitle">
           <div className="vp-dname">{n}</div>
-          {chips.length > 0 ? <div className="vp-dchips">{chips.map((c) => <span className="vp-chip" key={c}>{c}</span>)}</div> : null}
+          {chips.env || chips.owner ? (
+            <div className="vp-dchips">
+              {chips.env ? <span className="vp-chip">{chips.env}</span> : null}
+              {chips.owner ? <span className="vp-chip">{t('ownerPrefix')}{chips.owner}</span> : null}
+            </div>
+          ) : null}
         </div>
-        <button className="vp-x" title="关闭 (Esc)" onClick={props.onClose}><Glyph n="x" /></button>
+        <button className="vp-x" ref={closeRef} title={t('closeTitle')} aria-label={t('closeTitle')} onClick={props.onClose}><Glyph n="x" /></button>
       </div>
       <div className="vp-db">
         <div className="vp-acts">
-          {url ? <a className="vp-btn vp-btn-pri" href={url} target="_blank" rel="noreferrer" style={{ textDecoration: 'none' }}><Glyph n="ext" s={12} />打开链接</a> : null}
-          {fs.password && fs.password.enc ? <button className="vp-btn" onClick={() => props.onQuickCopy(n, 'password')}><Glyph n="copy" s={12} />复制密码</button> : null}
-          {fs.username && !fs.username.enc && fs.username.value ? <button className="vp-btn" onClick={() => props.onCopy(String(fs.username?.value ?? ''), `${n} · username`)}><Glyph n="copy" s={12} />复制账号</button> : null}
+          {url ? <a className="vp-btn vp-btn-pri" href={url} target="_blank" rel="noreferrer" style={{ textDecoration: 'none' }}><Glyph n="ext" s={12} />{t('openLink')}</a> : null}
+          {fs.password && fs.password.enc ? <button className="vp-btn" onClick={() => props.onQuickCopy(n, 'password')}><Glyph n="copy" s={12} />{t('copyPassword')}</button> : null}
+          {fs.username && !fs.username.enc && fs.username.value ? <button className="vp-btn" onClick={() => props.onCopy(String(fs.username?.value ?? ''), `${n} · username`)}><Glyph n="copy" s={12} />{t('copyUsername')}</button> : null}
         </div>
-        {hasTotp ? <div><div className="vp-sec">动态验证码</div><TotpWidget name={n} onCopy={props.onCopy} /></div> : null}
-        <div className="vp-sec">字段 ({keys.length})</div>
+        {hasTotp ? <div><div className="vp-sec">{t('totpSection')}</div><TotpWidget name={n} onCopy={props.onCopy} /></div> : null}
+        <div className="vp-sec">{t('fieldsSection')} ({keys.length})</div>
         {keys.map((k) => (
           <FieldRow key={k} name={n} field={k} f={fs[k]!} revealed={props.secrets[`${n}\u0000${k}`]}
             onReveal={props.onReveal} onHide={props.onHide} onCopy={props.onCopy}
@@ -241,25 +258,25 @@ function Drawer(props: DrawerProps) {
         ))}
         {addOpen ? (
           <div className="vp-addf">
-            <input placeholder="字段名" value={fk} onChange={(e: ChangeEvent<HTMLInputElement>) => setFk(e.target.value)} />
-            <input className="vp-wide" placeholder="值" value={fv}
+            <input placeholder={t('fieldNamePh')} aria-label={t('fieldNamePh')} value={fk} onChange={(e: ChangeEvent<HTMLInputElement>) => setFk(e.target.value)} />
+            <input className="vp-wide" placeholder={t('fieldValuePh')} aria-label={t('fieldValuePh')} value={fv}
               onChange={(e: ChangeEvent<HTMLInputElement>) => setFv(e.target.value)}
               onKeyDown={(e: ReactKeyboardEvent) => { if (e.key === 'Enter' && fk) props.onSave(n, fk, fv, () => { setAddOpen(false); setFk(''); setFv('') }) }} />
             <button className="vp-btn" disabled={!fk}
-              onClick={() => props.onSave(n, fk, fv, () => { setAddOpen(false); setFk(''); setFv('') })}>添加</button>
-            <button className="vp-btn" onClick={() => setAddOpen(false)}>取消</button>
+              onClick={() => props.onSave(n, fk, fv, () => { setAddOpen(false); setFk(''); setFv('') })}>{t('add')}</button>
+            <button className="vp-btn" onClick={() => setAddOpen(false)}>{t('cancel')}</button>
           </div>
         ) : (
-          <button className="vp-btn" style={{ marginTop: 9 }} onClick={() => setAddOpen(true)}><Glyph n="plus" s={12} />添加字段</button>
+          <button className="vp-btn" style={{ marginTop: 9 }} onClick={() => setAddOpen(true)}><Glyph n="plus" s={12} />{t('addField')}</button>
         )}
-        <div className="vp-hint" style={{ marginTop: 7 }}>字段名含 key / secret / token / cert 等会自动加密（白名单规则）</div>
+        <div className="vp-hint" style={{ marginTop: 7 }}>{t('encHint')}</div>
         {note ? <div className="vp-note">{note}</div> : null}
         <div className="vp-danger">
-          <span className="vp-dhint">改动后记得在顶栏点“提交”（git）</span>
+          <span className="vp-dhint">{t('commitHint')}</span>
           {confirmEntry ? (
-            <button className="vp-btn vp-btn-danger" onClick={() => { setConfirmEntry(false); props.onDeleteEntry(n) }}>确认删除整条？</button>
+            <button className="vp-btn vp-btn-danger" onClick={() => { setConfirmEntry(false); props.onDeleteEntry(n) }}>{t('confirmDeleteEntry')}</button>
           ) : (
-            <button className="vp-btn vp-btn-danger" onClick={() => setConfirmEntry(true)}><Glyph n="trash" s={12} />删除条目</button>
+            <button className="vp-btn vp-btn-danger" onClick={() => setConfirmEntry(true)}><Glyph n="trash" s={12} />{t('deleteEntry')}</button>
           )}
         </div>
       </div>
@@ -294,20 +311,20 @@ function NewModal({ onClose, onCreated, onSay }: { onClose: () => void; onCreate
   return (
     <div className="vp-modal">
       <div className="vp-backdrop" onClick={onClose} />
-      <div className="vp-mbox" style={{ maxWidth: 480 }}>
-        <div className="vp-mh">新建条目<button className="vp-x" onClick={onClose}><Glyph n="x" s={13} /></button></div>
+      <div className="vp-mbox" style={{ maxWidth: 480 }} role="dialog" aria-modal="true" aria-label={t('newTitle')}>
+        <div className="vp-mh">{t('newTitle')}<button className="vp-x" aria-label={t('closeTitle')} onClick={onClose}><Glyph n="x" s={13} /></button></div>
         <div className="vp-mb">
           <div className="vp-form">
-            {field('名称 *（用 / 分组，如 服务/微信支付）', name, setName, '服务/新服务')}
-            {field('URL', url, setUrl, 'https://…')}
-            {field('用户名', username, setUsername, 'zhangsan')}
-            {field('备注', note, setNote, '用途 / 申请流程 / 注意事项')}
-            <div className="vp-hint">密码会自动生成 24 位随机值（不显示）；建好后在详情里点复制。服务凭证类（AppID/AppKey）建好后用“添加字段”补充。</div>
+            {field(t('nameLabel'), name, setName, t('namePh'))}
+            {field(t('urlLabel'), url, setUrl, 'https://…')}
+            {field(t('usernameLabel'), username, setUsername, 'zhangsan')}
+            {field(t('noteLabel'), note, setNote, t('notePh'))}
+            <div className="vp-hint">{t('newHint')}</div>
           </div>
         </div>
         <div className="vp-mf">
-          <button className="vp-btn" onClick={onClose}>取消</button>
-          <button className="vp-btn vp-btn-pri" disabled={!name.trim() || busy} onClick={submit}>{busy ? '创建中…' : '创建'}</button>
+          <button className="vp-btn" onClick={onClose}>{t('cancel')}</button>
+          <button className="vp-btn vp-btn-pri" disabled={!name.trim() || busy} onClick={submit}>{busy ? t('creating') : t('createBtn')}</button>
         </div>
       </div>
     </div>
@@ -315,20 +332,33 @@ function NewModal({ onClose, onCreated, onSay }: { onClose: () => void; onCreate
 }
 
 function AuditModal({ onClose }: { onClose: () => void }) {
-  const [txt, setTxt] = useState('审计运行中…')
+  const [txt, setTxt] = useState(t('auditRunning'))
+  const [log, setLog] = useState<string[] | null>(null)
   useEffect(() => {
     api<{ report: string }>('audit').then(
       (r) => setTxt(r.report),
       (e: unknown) => setTxt(`⚠ ${String((e as Error | undefined)?.message ?? e)}`),
     )
+    api<{ lines: string[] }>('audit-log').then(
+      (r) => setLog(r.lines),
+      () => setLog([]),
+    )
   }, [])
   return (
     <div className="vp-modal">
       <div className="vp-backdrop" onClick={onClose} />
-      <div className="vp-mbox">
-        <div className="vp-mh"><span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}><Glyph n="shield" />安全审计</span>
-          <button className="vp-x" onClick={onClose}><Glyph n="x" s={13} /></button></div>
-        <div className="vp-mb"><pre className="vp-pre">{txt}</pre></div>
+      <div className="vp-mbox" role="dialog" aria-modal="true" aria-label={t('auditTitle')}>
+        <div className="vp-mh">
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}><Glyph n="shield" />{t('auditTitle')}</span>
+          <button className="vp-x" aria-label={t('closeTitle')} onClick={onClose}><Glyph n="x" s={13} /></button>
+        </div>
+        <div className="vp-mb">
+          <pre className="vp-pre">{txt}</pre>
+          <div className="vp-sec" style={{ marginTop: 16 }}>{t('auditLogTitle')}</div>
+          {log === null ? null : log.length === 0
+            ? <div className="vp-hint">{t('auditLogEmpty')}</div>
+            : <pre className="vp-pre">{log.slice().reverse().join('\n')}</pre>}
+        </div>
       </div>
     </div>
   )
@@ -367,7 +397,7 @@ export function VaultPanel() {
     api<VaultMeta>('meta').then(
       (d) => {
         setMeta(d && typeof d === 'object' ? d : {})
-        try { setStamp(new Date().toLocaleTimeString('zh-CN', { hour12: false })) } catch { /* ignore */ }
+        try { setStamp(new Date().toLocaleTimeString(undefined, { hour12: false })) } catch { /* ignore */ }
         refreshDirty()
       },
       (e: unknown) => setErr(String((e as Error | undefined)?.message ?? e)),
@@ -380,13 +410,13 @@ export function VaultPanel() {
   }, [meta, sel])
 
   const onCopy = useCallback((text: string, label: string) => {
-    void copyText(text).then((ok) => say(ok ? `✓ 已复制 ${label}` : '复制失败'))
+    void copyText(text).then((ok) => say(ok ? t('copied', { label }) : t('copyFailed')))
   }, [say])
 
   const onReveal = useCallback((n: string, f: string) => {
     const k = `${n}\u0000${f}`
     api<{ value: string }>('reveal', { name: n, field: f }).then(
-      (r) => setSecrets((p) => ({ ...p, [k]: r.value })),
+      (r) => setSecrets((p) => (p[k] !== undefined ? p : { ...p, [k]: r.value })),
       (e: unknown) => setSecrets((p) => ({ ...p, [k]: `⚠ ${String((e as Error | undefined)?.message ?? e).slice(0, 50)}` })),
     )
   }, [])
@@ -397,35 +427,35 @@ export function VaultPanel() {
 
   const onQuickCopy = useCallback((n: string, f: string) => {
     api<{ value: string }>('reveal', { name: n, field: f }).then(
-      (r) => { void copyText(r.value).then((ok) => say(ok ? `✓ 已复制 ${n} 的 ${f}（未显示）` : '复制失败')) },
+      (r) => { void copyText(r.value).then((ok) => say(ok ? t('copiedHidden', { name: n, field: f }) : t('copyFailed'))) },
       (e: unknown) => say(`⚠ ${String((e as Error | undefined)?.message ?? e).slice(0, 60)}`),
     )
   }, [say])
 
   const onSave = useCallback((n: string, f: string, v: string, done: () => void) => {
     api<{ saved: string }>('set', { name: n, field: f, value: v }).then(
-      () => { onHide(n, f); done(); say(`✓ 已保存 ${n} · ${f}`); load() },
+      () => { onHide(n, f); done(); say(t('saved', { name: n, field: f })); load() },
       (e: unknown) => say(`⚠ ${String((e as Error | undefined)?.message ?? e).slice(0, 70)}`),
     )
   }, [onHide, say, load])
 
   const onDeleteField = useCallback((n: string, f: string) => {
     api<{ removed: string }>('rm', { name: n, field: f }).then(
-      () => { onHide(n, f); say(`已删除字段 ${f}`); load() },
+      () => { onHide(n, f); say(t('fieldDeleted', { field: f })); load() },
       (e: unknown) => say(`⚠ ${String((e as Error | undefined)?.message ?? e).slice(0, 70)}`),
     )
   }, [onHide, say, load])
 
   const onDeleteEntry = useCallback((n: string) => {
     api<{ removed: string }>('rm', { name: n }).then(
-      () => { setSel(''); say(`已删除 ${n}`); load() },
+      () => { setSel(''); say(t('entryDeleted', { name: n })); load() },
       (e: unknown) => say(`⚠ ${String((e as Error | undefined)?.message ?? e).slice(0, 70)}`),
     )
   }, [say, load])
 
   const commit = useCallback(() => {
-    api<{ msg: string }>('save', { msg: `面板改动 ${stamp}` }).then(
-      () => { setDirty(false); say('✓ 已提交到 git') },
+    api<{ committed: boolean; msg: string }>('save', { msg: `vault panel ${stamp}` }).then(
+      () => { setDirty(false); say(t('committed')) },
       (e: unknown) => say(`⚠ ${String((e as Error | undefined)?.message ?? e).slice(0, 70)}`),
     )
   }, [say, stamp])
@@ -437,8 +467,8 @@ export function VaultPanel() {
       if (sel !== '') { setSel(''); return }
       if (q !== '') { setQ(''); return }
     }
-    const t = (e.target as HTMLElement | null)?.tagName ?? ''
-    if ((e.key === '/' || ((e.metaKey || e.ctrlKey) && e.key === 'k')) && t !== 'INPUT' && t !== 'TEXTAREA') {
+    const tag = (e.target as HTMLElement | null)?.tagName ?? ''
+    if ((e.key === '/' || ((e.metaKey || e.ctrlKey) && e.key === 'k')) && tag !== 'INPUT' && tag !== 'TEXTAREA') {
       e.preventDefault()
       searchRef.current?.focus()
     }
@@ -448,8 +478,8 @@ export function VaultPanel() {
   if (err !== '') {
     body = (
       <div className="vp-body">
-        <div className="vp-err">加载失败：{err}</div>
-        <button className="vp-btn" onClick={load}><Glyph n="refresh" s={12} />重试</button>
+        <div className="vp-err">{t('loadFail')}{err}</div>
+        <button className="vp-btn" onClick={load}><Glyph n="refresh" s={12} />{t('retry')}</button>
       </div>
     )
   } else if (meta === null) {
@@ -468,23 +498,23 @@ export function VaultPanel() {
       const envv = fs.env && !fs.env.enc ? String(fs.env.value ?? '') : ''
       const enc = encCount(fs)
       return (
-        <div key={n} className={`vp-row${sel === n ? ' vp-sel' : ''}`} role="button" tabIndex={0}
+        <div key={n} className={`vp-row${sel === n ? ' vp-sel' : ''}`} role="button" tabIndex={0} aria-label={n}
           onClick={() => setSel(n)}
           onKeyDown={(e: ReactKeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSel(n) } }}>
-          <div className="vp-av" style={{ background: `hsl(${String(hueOf(n))},52%,42%)` }}>{short.slice(0, 1).toUpperCase()}</div>
+          <div className="vp-av" aria-hidden="true" style={{ background: `hsl(${String(hueOf(n))},52%,42%)` }}>{short.slice(0, 1).toUpperCase()}</div>
           <div className="vp-row-main">
             <div className="vp-row-name" title={n}>{short}</div>
             {entrySubline(fs) ? <div className="vp-row-sub">{entrySubline(fs)}</div> : null}
           </div>
           <div className="vp-row-right">
             {envv ? <span className="vp-chip">{envv}</span> : null}
-            {enc > 0 ? <span className="vp-lock" title={`${String(enc)} 个加密字段`}><Glyph n="key" s={10} />{enc}</span> : null}
+            {enc > 0 ? <span className="vp-lock" title={t('encFieldsTitle', { n: enc })}><Glyph n="key" s={10} />{enc}</span> : null}
             {fs.password && fs.password.enc ? (
-              <button className="vp-icobtn" title="复制密码（不显示）"
+              <button className="vp-icobtn" title={t('quickCopyTitle')} aria-label={t('quickCopyTitle')}
                 onClick={(e) => { e.stopPropagation(); onQuickCopy(n, 'password') }}><Glyph n="copy" s={12} /></button>
             ) : null}
             {urlv ? (
-              <a className="vp-icobtn" title="打开链接" href={urlv} target="_blank" rel="noreferrer"
+              <a className="vp-icobtn" title={t('openLink')} aria-label={t('openLink')} href={urlv} target="_blank" rel="noreferrer"
                 onClick={(e) => e.stopPropagation()}><Glyph n="ext" s={12} /></a>
             ) : null}
           </div>
@@ -493,18 +523,18 @@ export function VaultPanel() {
     }
     body = (
       <div className="vp-body">
-        <div className="vp-sub">加密值只在你点击时才从 Host 取回；模型侧只能读到结构，拿不到明文。数据源 ~/Vault（sops+age+git）。快捷键：/ 搜索 · Esc 返回</div>
-        {groupEntries(meta, visible).map(([g, names]) => (
+        <div className="vp-sub">{t('subline')}</div>
+        {groupEntries(meta, visible, t('groupFallback')).map(([g, names]) => (
           <div key={g}>
-            <button className="vp-gh" onClick={() => setCollapsed((p) => ({ ...p, [g]: !p[g] }))}>
+            <button className="vp-gh" aria-expanded={collapsed[g] !== true} onClick={() => setCollapsed((p) => ({ ...p, [g]: !p[g] }))}>
               <span className={`vp-chev${collapsed[g] === true ? ' vp-chev-c' : ''}`}><Glyph n="chev" s={13} /></span>
-              {g} · {names.length} 条
+              {g} · {names.length} {t('entriesSuffixGroup')}
             </button>
             {collapsed[g] === true ? null : <div className="vp-grid">{names.map(row)}</div>}
           </div>
         ))}
         {visible.length === 0 ? (
-          <div className="vp-empty">{ql !== '' ? `没有匹配“${q}”的记录` : '库是空的，点右上“新建”添加第一条'}</div>
+          <div className="vp-empty">{ql !== '' ? t('noMatch', { q }) : t('emptyVault')}</div>
         ) : null}
       </div>
     )
@@ -517,18 +547,18 @@ export function VaultPanel() {
     <div className="vp-root" onKeyDown={onKey} tabIndex={-1}>
       <div className="vp-top">
         <span className="vp-title"><Glyph n="shield" s={15} />Vault
-          {meta !== null ? <span className="vp-count">{total} 条 · {totalEnc} 个加密字段{stamp !== '' ? ` · ${stamp}` : ''}</span> : null}
+          {meta !== null ? <span className="vp-count">{total} {t('entriesSuffix')} · {totalEnc} {t('encFieldsSuffix')}{stamp !== '' ? ` · ${stamp}` : ''}</span> : null}
         </span>
         <div className="vp-search">
           <Glyph n="search" s={13} />
-          <input ref={searchRef} className="vp-input" type="search" placeholder="搜索系统 / 字段 / 值…（按 / 聚焦）"
+          <input ref={searchRef} className="vp-input" type="search" aria-label={t('searchPlaceholder')} placeholder={t('searchPlaceholder')}
             value={q} onChange={(e: ChangeEvent<HTMLInputElement>) => setQ(e.target.value)} />
         </div>
-        {dirty ? <span className="vp-dot" title="有未提交改动" /> : null}
-        {dirty ? <button className="vp-btn vp-btn-pri" onClick={commit}><Glyph n="check" s={12} />提交</button> : null}
-        <button className="vp-btn" title="重新读取" onClick={load}><Glyph n="refresh" s={12} /></button>
-        <button className="vp-btn" onClick={() => setAuditOpen(true)}><Glyph n="shield" s={12} />审计</button>
-        <button className="vp-btn vp-btn-pri" onClick={() => setNewOpen(true)}><Glyph n="plus" s={12} />新建</button>
+        {dirty ? <span className="vp-dot" title={t('uncommitted')} role="status" aria-label={t('uncommitted')} /> : null}
+        {dirty ? <button className="vp-btn vp-btn-pri" onClick={commit}><Glyph n="check" s={12} />{t('commit')}</button> : null}
+        <button className="vp-btn" title={t('reload')} aria-label={t('reload')} onClick={load}><Glyph n="refresh" s={12} /></button>
+        <button className="vp-btn" onClick={() => setAuditOpen(true)}><Glyph n="shield" s={12} />{t('audit')}</button>
+        <button className="vp-btn vp-btn-pri" onClick={() => setNewOpen(true)}><Glyph n="plus" s={12} />{t('create')}</button>
       </div>
       {body}
       {sel !== '' && meta !== null && meta[sel] !== undefined ? <div className="vp-backdrop" onClick={() => setSel('')} /> : null}
@@ -541,9 +571,9 @@ export function VaultPanel() {
       {auditOpen ? <AuditModal onClose={() => setAuditOpen(false)} /> : null}
       {newOpen ? (
         <NewModal onClose={() => setNewOpen(false)} onSay={say}
-          onCreated={(nm) => { setNewOpen(false); say(`✓ 已创建 ${nm}（密码已随机生成）`); load(); setSel(nm) }} />
+          onCreated={(nm) => { setNewOpen(false); say(t('created', { name: nm })); load(); setSel(nm) }} />
       ) : null}
-      {toast !== '' ? <div className="vp-toast">{toast}</div> : null}
+      {toast !== '' ? <div className="vp-toast" role="status">{toast}</div> : null}
     </div>
   )
 }

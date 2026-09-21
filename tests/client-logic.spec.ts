@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
-  chipsOf, encCount, entrySubline, fieldOrder, groupName, groupEntries,
+  chipValues, encCount, entrySubline, fieldOrder, groupName, groupEntries,
   hostOf, hueOf, isLinkValue, matchEntry, noteOf, orderGroups, shortName,
 } from '../src/client/logic.ts'
 import type { FieldMeta, VaultMeta } from '../src/client/api.ts'
@@ -28,7 +28,7 @@ const FIELDS: Record<string, FieldMeta> = {
 describe('name helpers', () => {
   it('splits group and short name', () => {
     expect(groupName('工作/公司VPN')).toBe('工作')
-    expect(groupName('裸名字')).toBe('未分组')
+    expect(groupName('裸名字')).toBe('')
     expect(shortName('工作/公司VPN')).toBe('公司VPN')
     expect(shortName('裸名字')).toBe('裸名字')
   })
@@ -69,7 +69,8 @@ describe('value helpers', () => {
   })
 
   it('chips and note read the chrome fields', () => {
-    expect(chipsOf(FIELDS)).toEqual(['prod', '负责: ops'])
+    expect(chipValues(FIELDS)).toEqual({ env: 'prod', owner: 'ops' })
+    expect(chipValues({})).toEqual({ env: '', owner: '' })
     expect(noteOf(FIELDS)).toBe('需先连办公网')
     expect(noteOf({})).toBe('')
   })
@@ -101,5 +102,11 @@ describe('groupEntries', () => {
     const grouped = groupEntries(meta, Object.keys(meta))
     expect(grouped.map(([g]) => g)).toEqual(['工作', '服务', '生活'])
     expect(grouped[0]![1]).toEqual(['工作/VPN'])
+  })
+
+  it('uses the caller-supplied fallback for ungrouped entries', () => {
+    const meta: VaultMeta = { '裸名字': { url: plain('https://x') } }
+    expect(groupEntries(meta, ['裸名字'], 'Ungrouped')[0]![0]).toBe('Ungrouped')
+    expect(groupEntries(meta, ['裸名字'], '未分组')[0]![0]).toBe('未分组')
   })
 })

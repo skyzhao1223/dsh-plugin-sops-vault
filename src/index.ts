@@ -1,23 +1,28 @@
 /**
- * dsh-plugin-vault — node half.
+ * dsh-plugin-sops-vault — node half.
  *
- * Registers one prefix route `/vault-api` on the DSH web server that drives the
- * local `vault` CLI (sops + age + git) of a Vault repository. The browser half
- * (exports["./client"], discovered via the package.json `dsh.client`
+ * Registers one prefix route `/vault-api` on the DSH web server that drives a
+ * local sops+age+git vault repository DIRECTLY (shelling out only to the
+ * `sops` and `git` binaries; no external `vault` CLI dependency). The browser
+ * half (exports["./client"], discovered via the package.json `dsh.client`
  * declaration) renders the sidebar panel and talks to this API same-origin.
  *
  * Security posture:
  * - NO model-facing tools are registered. Agents cannot reach plaintext through
- *   this plugin at all; the vault CLI's own `meta` command (structure only) is
- *   what an agent-side integration should use.
+ *   this plugin at all.
  * - Every request passes an Origin policy (see `isAllowedOrigin`): cross-origin
  *   browser requests are rejected, so a malicious web page cannot drive the
  *   vault even though the server listens on loopback.
  * - Plaintext secret values cross the API only for `reveal`/`totp`, which the
  *   panel calls on an explicit human click.
+ * - Every plaintext read and every write is appended to an access log that
+ *   NEVER contains values (`.git/dsh-vault-audit.log`, or `<vaultDir>/.audit.log`
+ *   when the vault is not a git repo — kept out of git so the dirty state is
+ *   unaffected).
  *
- * @module dsh-plugin-vault
+ * @module dsh-plugin-sops-vault
  */
+import { appendFileSync, existsSync, readFileSync } from 'node:fs'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -26,27 +31,31 @@ import z from '@deepseek-ai/schemastery'
 import {
   API_PATH,
   asString,
+  auditLine,
+  auditVault,
+  genPassword,
   isAllowedOrigin,
-  parseTotpOutput,
+  parseRawVault,
   quote,
+  sopsPath,
   subPath,
+  totpFromSeed,
   validateEntryName,
   validateFieldName,
-  vaultCommand,
 } from './host/vault.ts'
 import type { ShellLike, VaultPluginConfig, WebServerLike } from './host/types.ts'
 
 /** Cordis function-plugin name. */
-export const name = 'dsh-plugin-vault'
+export const name = 'dsh-plugin-sops-vault'
 
 /** Hard dependencies: the web carrier and the bash execution service. */
 export const inject = ['webServer', 'shell']
 
-/** Row config: where the vault lives and how long commands may run.
- *  schemastery fields are optional unless `.required()`; see VaultPluginConfig. */
+/** Row config: where the vault lives and which binaries to use. */
 export const Config = z.object({
   vaultDir: z.string(),
-  vaultBin: z.string(),
+  sopsBin: z.string(),
+  gitBin: z.string(),
   timeoutMs: z.number().step(1).min(1000).max(120000),
 })
 
@@ -87,25 +96,60 @@ async function readBody(req: IncomingMessage, limit = 64 * 1024): Promise<Record
 export function apply(ctx: Context): void {
   const config = (ctx as unknown as { config?: VaultPluginConfig }).config ?? {}
   const vaultDir = resolveDir(config.vaultDir)
-  const vaultBin = config.vaultBin ?? join(vaultDir, 'bin', 'vault')
+  const sopsBin = config.sopsBin ?? 'sops'
+  const gitBin = config.gitBin ?? 'git'
   const timeoutMs = config.timeoutMs ?? 15_000
+  const secretsFile = join(vaultDir, 'secrets.yaml')
+  const sopsConfigFile = join(vaultDir, '.sops.yaml')
+  const logFile = existsSync(join(vaultDir, '.git'))
+    ? join(vaultDir, '.git', 'dsh-vault-audit.log')
+    : join(vaultDir, '.audit.log')
   const { shell, webServer } = ctx as unknown as { shell: ShellLike; webServer: WebServerLike }
 
-  async function runVault(args: readonly string[], ms = timeoutMs): Promise<string> {
-    const spec = shell.resolve({ command: vaultCommand(vaultBin, args), workdir: vaultDir, timeoutMs: ms })
+  async function run(command: string, ms = timeoutMs): Promise<string> {
+    const spec = shell.resolve({ command, workdir: vaultDir, timeoutMs: ms })
     const r = await shell.run(spec)
     const out = typeof r?.stdout?.text === 'string' ? r.stdout.text : ''
     const err = typeof r?.stderr?.text === 'string' ? r.stderr.text : ''
     if (r?.exitCode !== 0) {
-      throw new Error(`vault ${String(args[0])} failed (exit ${String(r?.exitCode ?? '?')}): ${(err || out).slice(0, 300)}`)
+      throw new Error(`command failed (exit ${String(r?.exitCode ?? '?')}): ${(err || out).slice(0, 300)}`)
     }
     return out
   }
 
-  async function runRaw(command: string, ms = 8000): Promise<string> {
+  async function runOk(command: string, ms = timeoutMs): Promise<number | null> {
     const spec = shell.resolve({ command, workdir: vaultDir, timeoutMs: ms })
     const r = await shell.run(spec)
-    return typeof r?.stdout?.text === 'string' ? r.stdout.text : ''
+    return r?.exitCode ?? null
+  }
+
+  /** sops sub-invocation against the vault's secrets file. */
+  const sops = (args: readonly string[], ms?: number): Promise<string> =>
+    run([quote(sopsBin), ...args.map(quote)].join(' '), ms)
+
+  const git = (args: readonly string[], ms?: number): Promise<string> =>
+    run([quote(gitBin), ...args.map(quote)].join(' '), ms)
+
+  function log(action: string, target: string, req: IncomingMessage): void {
+    try {
+      appendFileSync(logFile, `${auditLine(action, target, req.socket?.remoteAddress ?? '?')}\n`)
+    } catch {
+      /* logging must never fail a request */
+    }
+  }
+
+  function readSecretsRaw(): string {
+    if (!existsSync(secretsFile)) throw new Error(`vault not found: ${secretsFile} (set config.vaultDir)`)
+    return readFileSync(secretsFile, 'utf8')
+  }
+
+  async function extractField(name: string, field: string): Promise<string> {
+    const out = await sops(['decrypt', '--extract', sopsPath(['systems', name, field]), secretsFile])
+    return out.replace(/\n+$/, '')
+  }
+
+  async function setField(name: string, field: string, value: string): Promise<void> {
+    await sops(['set', '--idempotent', secretsFile, sopsPath(['systems', name, field]), JSON.stringify(value)], 20_000)
   }
 
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -119,16 +163,25 @@ export function apply(ctx: Context): void {
 
       if (method === 'GET') {
         if (route === 'meta') {
-          const data: unknown = JSON.parse(await runVault(['meta']))
-          send(res, 200, { ok: true, data: data && typeof data === 'object' ? data : {} })
+          send(res, 200, { ok: true, data: parseRawVault(readSecretsRaw()) })
           return
         }
         if (route === 'audit') {
-          send(res, 200, { ok: true, data: { report: await runVault(['audit'], 30_000) } })
+          const sopsYaml = existsSync(sopsConfigFile) ? readFileSync(sopsConfigFile, 'utf8') : ''
+          const result = auditVault(readSecretsRaw(), sopsYaml)
+          send(res, 200, { ok: true, data: { report: result.report, high: result.findings.filter((f) => f.level === 'high').length } })
+          return
+        }
+        if (route === 'audit-log') {
+          let lines: string[] = []
+          try {
+            lines = readFileSync(logFile, 'utf8').split('\n').filter(Boolean).slice(-200)
+          } catch { /* no log yet */ }
+          send(res, 200, { ok: true, data: { file: logFile, lines } })
           return
         }
         if (route === 'dirty') {
-          const out = await runRaw(`git -C ${quote(vaultDir)} status --porcelain`)
+          const out = await git(['-C', vaultDir, 'status', '--porcelain'])
           send(res, 200, { ok: true, data: { dirty: out.trim() !== '' } })
           return
         }
@@ -141,15 +194,18 @@ export function apply(ctx: Context): void {
           if (!validateEntryName(body.name)) throw new Error('reveal: invalid name')
           const field = body.field === undefined ? 'password' : body.field
           if (!validateFieldName(field)) throw new Error('reveal: invalid field')
-          const out = await runVault(['get', body.name, field])
-          send(res, 200, { ok: true, data: { value: out.replace(/\n+$/, '') } })
+          const value = await extractField(body.name, field)
+          log('reveal', `${body.name}.${field}`, req)
+          send(res, 200, { ok: true, data: { value } })
           return
         }
         if (route === 'totp') {
           if (!validateEntryName(body.name)) throw new Error('totp: invalid name')
-          const parsed = parseTotpOutput(await runVault(['totp', body.name]))
-          if (!parsed) throw new Error('totp: unparseable output')
-          send(res, 200, { ok: true, data: parsed })
+          const seed = await extractField(body.name, 'totp')
+          const result = seed ? totpFromSeed(seed) : null
+          if (!result) throw new Error('totp: no usable seed stored for this entry')
+          log('totp', body.name, req)
+          send(res, 200, { ok: true, data: result })
           return
         }
         if (route === 'set') {
@@ -157,7 +213,8 @@ export function apply(ctx: Context): void {
           if (!validateFieldName(body.field)) throw new Error('set: invalid field')
           const value = asString(body.value, 16 * 1024)
           if (value === null) throw new Error('set: invalid value')
-          await runVault(['set', body.name, body.field, value], 20_000)
+          await setField(body.name, body.field, value)
+          log('set', `${body.name}.${body.field}`, req)
           send(res, 200, { ok: true, data: { saved: `${body.name}.${body.field}` } })
           return
         }
@@ -165,25 +222,40 @@ export function apply(ctx: Context): void {
           if (!validateEntryName(body.name)) throw new Error('rm: invalid name')
           const field = body.field === undefined || body.field === '' ? null : body.field
           if (field !== null && !validateFieldName(field)) throw new Error('rm: invalid field')
-          await runVault(field === null ? ['rm', body.name] : ['rm', body.name, field])
+          await sops(['unset', '--idempotent', secretsFile, sopsPath(field === null ? ['systems', body.name] : ['systems', body.name, field])])
+          log('rm', field === null ? body.name : `${body.name}.${field}`, req)
           send(res, 200, { ok: true, data: { removed: field === null ? body.name : `${body.name}.${field}` } })
           return
         }
         if (route === 'create') {
           if (!validateEntryName(body.name)) throw new Error('create: invalid name')
-          const cmd = ['new', String(body.name).trim()]
-          for (const key of ['url', 'username', 'note'] as const) {
-            const v = asString(body[key], 2000)
-            if (v !== null && v !== '') cmd.push(`--${key}`, v)
+          const entry = String(body.name).trim()
+          const fields: Record<string, string> = {
+            url: asString(body.url, 2000) ?? '',
+            username: asString(body.username, 2000) ?? '',
+            note: asString(body.note, 2000) ?? '',
+            env: asString(body.env, 200) ?? '',
+            owner: asString(body.owner, 200) ?? '',
+            password: genPassword(),
+            totp: '',
+            token: '',
           }
-          const out = await runVault(cmd, 20_000)
-          send(res, 200, { ok: true, data: { created: String(body.name).trim(), msg: out.replace(/\n+$/, '') } })
+          for (const [k, v] of Object.entries(fields)) await setField(entry, k, v)
+          log('create', entry, req)
+          send(res, 200, { ok: true, data: { created: entry, passwordGenerated: true } })
           return
         }
         if (route === 'save') {
           const msg = asString(body.msg, 200) ?? 'vault panel changes'
-          const out = await runVault(['save', msg], 20_000)
-          send(res, 200, { ok: true, data: { msg: out.split('\n')[0] ?? '' } })
+          await git(['-C', vaultDir, 'add', '-A'], 20_000)
+          const staged = await runOk(`${quote(gitBin)} -C ${quote(vaultDir)} diff --cached --quiet`)
+          if (staged === 0) {
+            send(res, 200, { ok: true, data: { committed: false, msg: 'nothing to commit' } })
+            return
+          }
+          const out = await git(['-C', vaultDir, 'commit', '-q', '-m', msg], 20_000)
+          log('save', msg, req)
+          send(res, 200, { ok: true, data: { committed: true, msg: out.split('\n')[0] ?? msg } })
           return
         }
       }

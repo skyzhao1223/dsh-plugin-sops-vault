@@ -13,7 +13,7 @@
 import { defineConfig } from 'tsdown'
 
 /** Plugin id — also the package name stamped into the ModuleLoader handoff. */
-const id = 'dsh-plugin-vault'
+const id = 'dsh-plugin-sops-vault'
 
 /**
  * Platform seed modules: provided by the boot graph, never bundled.
@@ -41,10 +41,12 @@ export default defineConfig({
   dts: false,
   sourcemap: true,
   clean: false,
-  external: [...CLIENT_EXTERNALS],
-  // Anything not in the loader module table must inline; a require() the table
-  // cannot answer is a guaranteed runtime throw.
-  noExternal: (dep: string) => (CLIENT_EXTERNALS.includes(dep) ? undefined : true),
+  // Platform seed modules come from the loader module table, never bundled.
+  // Everything else inlines (this package has no third-party runtime deps;
+  // a require() the table cannot answer would be a guaranteed runtime throw).
+  deps: {
+    neverBundle: [...CLIENT_EXTERNALS],
+  },
   define: {
     'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV ?? 'production'),
   },

@@ -1,10 +1,10 @@
 /**
  * Package-owned stylesheet. Injected once on client apply as
- * `<style data-plugin="dsh-plugin-vault">` and removed with the plugin fiber.
+ * `<style data-plugin="dsh-plugin-sops-vault">` and removed with the plugin fiber.
  * Colors ride DSH theme tokens with dark fallbacks so the panel follows the
  * host theme in light and dark mode.
  *
- * @module dsh-plugin-vault/client/styles
+ * @module dsh-plugin-sops-vault/client/styles
  */
 
 export const CSS = [
@@ -106,7 +106,7 @@ export const CSS = [
  */
 export function injectStyles(): () => void {
   if (typeof document === 'undefined') return () => {}
-  const id = 'dsh-plugin-vault'
+  const id = 'dsh-plugin-sops-vault'
   if (document.querySelector(`style[data-plugin="${id}"]`) !== null) return () => {}
   const tag = document.createElement('style')
   tag.dataset['plugin'] = id

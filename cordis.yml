@@ -1,10 +1,10 @@
-# Opt-in overlay that mounts dsh-plugin-vault over a `dsh web` composition:
+# Opt-in overlay that mounts dsh-plugin-sops-vault over a `dsh web` composition:
 #
-#   dsh web --patch /path/to/dsh-plugin-vault/cordis.yml
+#   dsh web --patch /path/to/dsh-plugin-sops-vault/cordis.yml
 #
 # The relative path resolves against this file's directory, so the plugin loads
 # straight from a built checkout (run `pnpm build` first). For a published
-# package, replace the name with `dsh-plugin-vault` after installing it into
+# package, replace the name with `dsh-plugin-sops-vault` after installing it into
 # the dsh installation tree.
 #
 # Config keys (all optional):

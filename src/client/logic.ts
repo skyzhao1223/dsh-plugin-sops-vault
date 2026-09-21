@@ -2,7 +2,7 @@
  * Pure UI logic shared by the panel and covered by `tests/client-logic.spec.ts`.
  * No React, no DOM, no fetch — deterministic transforms over vault metadata.
  *
- * @module dsh-plugin-vault/client/logic
+ * @module dsh-plugin-sops-vault/client/logic
  */
 import type { FieldMeta, VaultMeta } from './api.ts'
 
@@ -27,7 +27,7 @@ export function isLinkValue(v: string): boolean {
 /** Group prefix of an entry name (`工作/公司VPN` -> `工作`). */
 export function groupName(entry: string): string {
   const i = entry.indexOf('/')
-  return i > 0 ? entry.slice(0, i) : '未分组'
+  return i > 0 ? entry.slice(0, i) : ''
 }
 
 /** Display name with the group prefix stripped. */
@@ -104,21 +104,21 @@ export function noteOf(fields: Record<string, FieldMeta>): string {
   return ''
 }
 
-/** Entry chips (env + owner). */
-export function chipsOf(fields: Record<string, FieldMeta>): string[] {
-  const chips: string[] = []
+/** Raw chip values (env + owner); the caller localizes labels. */
+export function chipValues(fields: Record<string, FieldMeta>): { env: string; owner: string } {
   const env = fields.env
   const owner = fields.owner
-  if (env && !env.enc && env.value) chips.push(env.value)
-  if (owner && !owner.enc && owner.value) chips.push(`负责: ${owner.value}`)
-  return chips
+  return {
+    env: env && !env.enc && env.value ? env.value : '',
+    owner: owner && !owner.enc && owner.value ? owner.value : '',
+  }
 }
 
 /** Group visible entries into an ordered [group, names[]] list. */
-export function groupEntries(meta: VaultMeta, visible: readonly string[]): Array<[string, string[]]> {
+export function groupEntries(meta: VaultMeta, visible: readonly string[], fallback = 'Ungrouped'): Array<[string, string[]]> {
   const groups: Record<string, string[]> = {}
   for (const n of visible) {
-    const g = groupName(n)
+    const g = groupName(n) || fallback
     ;(groups[g] ??= []).push(n)
   }
   return orderGroups(Object.keys(groups)).map((g) => [g, groups[g]!] as [string, string[]])
