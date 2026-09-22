@@ -343,7 +343,7 @@ describe('route dispatch', () => {
     const ok = await call(mockReq('POST', `${API_PATH}/rename`, { name: '服务/支付', newName: '服务/支付2' }))
     expect(ok.json().data.renamed).toBe('服务/支付2')
     const roundtripCmd = commands.slice(before).find((c) => c.includes('--filename-override')) ?? ''
-    expect(roundtripCmd).toContain("'jq'")
+    expect(roundtripCmd).toContain('| jq ')
     expect(roundtripCmd).toContain('mv')
 
     const missing = await call(mockReq('POST', `${API_PATH}/rename`, { name: '没有这个', newName: 'x/y' }))
