@@ -82,6 +82,10 @@ overlay 只插入一行：
 
 发布安装时，把包装进 dsh 安装树后可将 `name` 换成裸包名。重新构建 client bundle 后刷新浏览器生效。
 
+挂载说明：`--patch` 是 dsh 的**全局**选项——用 `dsh web --patch <文件>`；
+不要在其前面夹其他 web 选项（如 `dsh web --no-open --patch …` 会解析失败）。
+启动会自动打开浏览器，多开的标签页关掉即可。
+
 ## API
 
 DSH web server 上的一个前缀路由；所有响应都是 `{ok, data|error}` JSON。

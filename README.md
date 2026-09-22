@@ -87,6 +87,10 @@ The overlay inserts one row:
 For a published install, replace `name` with the bare package name after installing it into the dsh tree.
 Refresh the browser after (re)building the client bundle.
 
+Mounting note: `--patch` is a **global** dsh option — `dsh web --patch <file>` works;
+do not sandwich other web options before it (e.g. `dsh web --no-open --patch …` fails
+to parse). The browser opens automatically; close the extra tab if unwanted.
+
 ## API
 
 One prefix route on the DSH web server; every response is `{ok, data|error}` JSON.
