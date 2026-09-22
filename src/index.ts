@@ -133,6 +133,23 @@ export function apply(ctx: Context, config?: VaultPluginConfig): void {
   const git = (args: readonly string[], ms?: number): Promise<string> =>
     run([quote(gitBin), ...args.map(quote)].join(' '), ms)
 
+  /**
+   * Sliding-window rate limit for plaintext-returning endpoints (reveal/totp).
+   * A human clicks at most a few per minute; a scripted burst (e.g. XSS inside
+   * the GUI scraping every secret) hits the ceiling immediately. In-memory per
+   * mount — deliberately not persisted.
+   */
+  const REVEAL_LIMIT = 30
+  const REVEAL_WINDOW_MS = 60_000
+  const revealTimes: number[] = []
+  function allowReveal(): boolean {
+    const now = Date.now()
+    while (revealTimes.length > 0 && now - (revealTimes[0] ?? 0) > REVEAL_WINDOW_MS) revealTimes.shift()
+    if (revealTimes.length >= REVEAL_LIMIT) return false
+    revealTimes.push(now)
+    return true
+  }
+
   function log(action: string, target: string, req: IncomingMessage): void {
     try {
       appendFileSync(logFile, `${auditLine(action, target, req.socket?.remoteAddress ?? '?')}\n`)
@@ -194,6 +211,10 @@ export function apply(ctx: Context, config?: VaultPluginConfig): void {
         const body = await readBody(req)
 
         if (route === 'reveal') {
+          if (!allowReveal()) {
+            send(res, 429, { ok: false, error: 'reveal rate limit exceeded (30/min); if this was not you, treat the GUI as compromised' })
+            return
+          }
           if (!validateEntryName(body.name)) throw new Error('reveal: invalid name')
           const field = body.field === undefined ? 'password' : body.field
           if (!validateFieldName(field)) throw new Error('reveal: invalid field')
@@ -203,6 +224,10 @@ export function apply(ctx: Context, config?: VaultPluginConfig): void {
           return
         }
         if (route === 'totp') {
+          if (!allowReveal()) {
+            send(res, 429, { ok: false, error: 'totp rate limit exceeded (30/min shared with reveal)' })
+            return
+          }
           if (!validateEntryName(body.name)) throw new Error('totp: invalid name')
           const seed = await extractField(body.name, 'totp')
           const result = seed ? totpFromSeed(seed) : null

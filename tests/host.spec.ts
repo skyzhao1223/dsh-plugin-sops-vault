@@ -350,6 +350,16 @@ describe('route dispatch', () => {
     expect(res.statusCode).toBe(404)
   })
 
+  it('rate-limits plaintext endpoints (429 after 30/min)', async () => {
+    let sawLimit = false
+    for (let i = 0; i < 45; i++) {
+      const res = mockRes()
+      await captured[0]!.handler(mockReq('POST', `${API_PATH}/reveal`, { name: '工作/VPN', field: 'password' }), res)
+      if (res.statusCode === 429) { sawLimit = true; break }
+    }
+    expect(sawLimit).toBe(true)
+  })
+
   it('rejects invalid identifiers', async () => {
     const res = await call(mockReq('POST', `${API_PATH}/set`, { name: 'ok', field: 'bad field', value: 'v' }))
     expect(res.statusCode).toBe(500)
