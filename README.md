@@ -37,7 +37,7 @@ the model.
 
 - Node.js `^22.19.0 || >=24.0.0`, pnpm
 - `sops`, `age`, `git` on the host PATH (`brew install sops age`)
-- A vault repository at `~/Vault` (or `config.vaultDir`) containing:
+- A vault repository at `~/Vault` (or `config.vaultDir`) — easiest created by **[sops-vault-kit](https://github.com/skyzhao1223/sops-vault-kit)** (`./install.sh`), containing:
   - `secrets.yaml` — sops-encrypted YAML; entries live under a top-level `systems:` map
   - `.sops.yaml` — creation rules using the **allowlist** mode (`unencrypted_regex`: everything
     encrypted except explicitly public field names like `url`/`appid`/`env`/`owner`/`note`)

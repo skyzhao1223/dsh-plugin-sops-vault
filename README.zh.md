@@ -31,7 +31,7 @@
 
 - Node.js `^22.19.0 || >=24.0.0`、pnpm
 - Host PATH 上有 `sops`、`age`、`git`（`brew install sops age`）
-- 一个位于 `~/Vault`（或 `config.vaultDir`）的库仓库，包含：
+- 一个位于 `~/Vault`（或 `config.vaultDir`）的库仓库——最省事的方式是用 **[sops-vault-kit](https://github.com/skyzhao1223/sops-vault-kit)** 一键生成（`./install.sh`），包含：
   - `secrets.yaml` —— sops 加密的 YAML，条目在顶层 `systems:` 映射下
   - `.sops.yaml` —— 使用**白名单**模式的规则（`unencrypted_regex`：除显式公开的字段名
     （如 `url`/`appid`/`env`/`owner`/`note`）外全部加密）
