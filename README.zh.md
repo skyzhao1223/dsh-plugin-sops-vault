@@ -142,7 +142,8 @@ Client bundle 遵循 DSH closure-factory 约定（`window.__ModuleLoader__.load`
 - [ ] 文案接入 DSH locale 服务（目前是独立中英字典）
 - [ ] README 截图（等真机挂载后补）
 - [x] reveal 限速（30 次/分钟滑动窗口，v0.2.0）
-- [ ] 条目重命名 / 排序、批量编辑
+- [x] 条目重命名 + 一键排序（v0.3.0）
+- [ ] 批量编辑
 - [ ] CSV 导入桥、KeePassXC `.kdbx` 镜像导出（手机端）
 - [ ] 可选的模型侧只读工具（`vault_list`，设计上仅结构）
 

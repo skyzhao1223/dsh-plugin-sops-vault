@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-sops-vault",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "DeepSeek Harness plugin: manage a local sops+age encrypted credential vault from a sidebar panel. Agents see structure only; plaintext flows only on human click.",
   "type": "module",
   "main": "lib/index.js",

@@ -338,6 +338,28 @@ describe('route dispatch', () => {
     expect(sets.length).toBe(8) // url username note env owner password totp token
   })
 
+  it('POST rename validates existence/conflicts and runs the round trip', async () => {
+    const before = commands.length
+    const ok = await call(mockReq('POST', `${API_PATH}/rename`, { name: '服务/支付', newName: '服务/支付2' }))
+    expect(ok.json().data.renamed).toBe('服务/支付2')
+    const roundtripCmd = commands.slice(before).find((c) => c.includes('--filename-override')) ?? ''
+    expect(roundtripCmd).toContain("'jq'")
+    expect(roundtripCmd).toContain('mv')
+
+    const missing = await call(mockReq('POST', `${API_PATH}/rename`, { name: '没有这个', newName: 'x/y' }))
+    expect(missing.statusCode).toBe(500)
+    expect(missing.json().error).toContain('not found')
+
+    const clash = await call(mockReq('POST', `${API_PATH}/rename`, { name: '服务/支付', newName: '工作/VPN' }))
+    expect(clash.statusCode).toBe(500)
+    expect(clash.json().error).toContain('exists')
+  })
+
+  it('POST sort runs the whole-file round trip', async () => {
+    const res = await call(mockReq('POST', `${API_PATH}/sort`))
+    expect(res.json()).toEqual({ ok: true, data: { sorted: true } })
+  })
+
   it('rejects cross-origin requests with 403 before touching sops', async () => {
     const before = commands.length
     const res = await call(mockReq('POST', `${API_PATH}/reveal`, { name: '工作/VPN' }, { origin: 'https://evil.com' }))

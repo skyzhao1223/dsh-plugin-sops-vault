@@ -81,6 +81,11 @@ const ZH = {
   auditLogNone: '（无日志文件）',
   ownerPrefix: '负责: ',
   keyIconTitle: '密钥字段',
+  rename: '重命名',
+  renamePh: '新名称（用 / 分组）',
+  renameOk: '✓ 已重命名为 {name}',
+  sortBtn: '排序',
+  sortedOk: '✓ 已按名称排序',
 } as const
 
 const EN: Record<keyof typeof ZH, string> = {
@@ -155,6 +160,11 @@ const EN: Record<keyof typeof ZH, string> = {
   auditLogNone: '(no log file)',
   ownerPrefix: 'owner: ',
   keyIconTitle: 'encrypted field',
+  rename: 'Rename',
+  renamePh: 'New name (group with /)',
+  renameOk: '✓ Renamed to {name}',
+  sortBtn: 'Sort',
+  sortedOk: '✓ Sorted by name',
 }
 
 export type CopyKey = keyof typeof ZH

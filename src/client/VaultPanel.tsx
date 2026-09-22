@@ -41,6 +41,7 @@ const ICONS: Record<string, IconSpec> = {
   chev: [['path', { d: 'M6 9l6 6 6-6' }]],
   key: [['circle', { cx: 7.5, cy: 15.5, r: 4.5 }], ['path', { d: 'M21 2l-9.6 9.6' }], ['path', { d: 'M15.5 7.5l3 3' }]],
   check: [['path', { d: 'M20 6L9 17l-5-5' }]],
+  sort: [['path', { d: 'M3 6h11' }], ['path', { d: 'M3 12h7' }], ['path', { d: 'M3 18h4' }], ['path', { d: 'M17 7v10' }], ['path', { d: 'M14 14l3 3 3-3' }]],
 }
 
 function Glyph({ n, s = 14 }: { n: string; s?: number }) {
@@ -208,6 +209,7 @@ interface DrawerProps {
   onSave: (n: string, f: string, v: string, done: () => void) => void
   onDeleteField: (n: string, f: string) => void
   onDeleteEntry: (n: string) => void
+  onRename: (n: string, nn: string, done: () => void) => void
   onClose: () => void
 }
 
@@ -217,6 +219,8 @@ function Drawer(props: DrawerProps) {
   const [fk, setFk] = useState('')
   const [fv, setFv] = useState('')
   const [confirmEntry, setConfirmEntry] = useState(false)
+  const [renaming, setRenaming] = useState(false)
+  const [nn, setNn] = useState(n)
   const closeRef = useRef<HTMLButtonElement | null>(null)
 
   useEffect(() => { closeRef.current?.focus() }, [])
@@ -233,7 +237,20 @@ function Drawer(props: DrawerProps) {
       <div className="vp-dh">
         <div className="vp-av" aria-hidden="true" style={{ background: `hsl(${String(hueOf(n))},52%,42%)` }}>{short.slice(0, 1).toUpperCase()}</div>
         <div className="vp-dtitle">
-          <div className="vp-dname">{n}</div>
+          {renaming ? (
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              <input className="vp-edit-in" style={{ flex: 1 }} value={nn} autoFocus aria-label={t('renamePh')} placeholder={t('renamePh')}
+                onChange={(e: ChangeEvent<HTMLInputElement>) => setNn(e.target.value)}
+                onKeyDown={(e: ReactKeyboardEvent) => {
+                  if (e.key === 'Enter' && nn.trim() !== '' && nn.trim() !== n) props.onRename(n, nn.trim(), () => setRenaming(false))
+                  if (e.key === 'Escape') setRenaming(false)
+                }} />
+              <button className="vp-icobtn" style={{ opacity: 1 }} title={t('save')} aria-label={t('save')}
+                onClick={() => { if (nn.trim() !== '' && nn.trim() !== n) props.onRename(n, nn.trim(), () => setRenaming(false)) }}><Glyph n="check" /></button>
+              <button className="vp-icobtn" style={{ opacity: 1 }} title={t('cancel')} aria-label={t('cancel')}
+                onClick={() => setRenaming(false)}><Glyph n="x" /></button>
+            </div>
+          ) : <div className="vp-dname">{n}</div>}
           {chips.env || chips.owner ? (
             <div className="vp-dchips">
               {chips.env ? <span className="vp-chip">{chips.env}</span> : null}
@@ -241,6 +258,7 @@ function Drawer(props: DrawerProps) {
             </div>
           ) : null}
         </div>
+        <button className="vp-x" title={t('rename')} aria-label={t('rename')} onClick={() => { setNn(n); setRenaming(true) }}><Glyph n="pencil" s={13} /></button>
         <button className="vp-x" ref={closeRef} title={t('closeTitle')} aria-label={t('closeTitle')} onClick={props.onClose}><Glyph n="x" /></button>
       </div>
       <div className="vp-db">
@@ -453,6 +471,20 @@ export function VaultPanel() {
     )
   }, [say, load])
 
+  const onRename = useCallback((oldName: string, newName: string, done: () => void) => {
+    api<{ renamed: string }>('rename', { name: oldName, newName }).then(
+      () => { done(); say(t('renameOk', { name: newName })); load(); setSel(newName) },
+      (e: unknown) => say(`⚠ ${String((e as Error | undefined)?.message ?? e).slice(0, 70)}`),
+    )
+  }, [say, load])
+
+  const doSort = useCallback(() => {
+    api<{ sorted: boolean }>('sort').then(
+      () => { say(t('sortedOk')); load() },
+      (e: unknown) => say(`⚠ ${String((e as Error | undefined)?.message ?? e).slice(0, 70)}`),
+    )
+  }, [say, load])
+
   const commit = useCallback(() => {
     api<{ committed: boolean; msg: string }>('save', { msg: `vault panel ${stamp}` }).then(
       () => { setDirty(false); say(t('committed')) },
@@ -557,6 +589,7 @@ export function VaultPanel() {
         {dirty ? <span className="vp-dot" title={t('uncommitted')} role="status" aria-label={t('uncommitted')} /> : null}
         {dirty ? <button className="vp-btn vp-btn-pri" onClick={commit}><Glyph n="check" s={12} />{t('commit')}</button> : null}
         <button className="vp-btn" title={t('reload')} aria-label={t('reload')} onClick={load}><Glyph n="refresh" s={12} /></button>
+        <button className="vp-btn" title={t('sortBtn')} onClick={doSort}><Glyph n="sort" s={12} />{t('sortBtn')}</button>
         <button className="vp-btn" onClick={() => setAuditOpen(true)}><Glyph n="shield" s={12} />{t('audit')}</button>
         <button className="vp-btn vp-btn-pri" onClick={() => setNewOpen(true)}><Glyph n="plus" s={12} />{t('create')}</button>
       </div>
@@ -565,7 +598,7 @@ export function VaultPanel() {
       {sel !== '' && meta !== null && meta[sel] !== undefined ? (
         <Drawer name={sel} fields={meta[sel]!} secrets={secrets}
           onReveal={onReveal} onHide={onHide} onCopy={onCopy} onQuickCopy={onQuickCopy}
-          onSave={onSave} onDeleteField={onDeleteField} onDeleteEntry={onDeleteEntry}
+          onSave={onSave} onDeleteField={onDeleteField} onDeleteEntry={onDeleteEntry} onRename={onRename}
           onClose={() => setSel('')} />
       ) : null}
       {auditOpen ? <AuditModal onClose={() => setAuditOpen(false)} /> : null}

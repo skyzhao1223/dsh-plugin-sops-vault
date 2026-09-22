@@ -148,7 +148,8 @@ cordis resolved from the platform module table); see `tsdown.config.ts`.
 - [ ] wire copy into the DSH locale service (currently standalone zh/en dictionaries)
 - [ ] screenshots in this README (pending a real mounted run)
 - [x] reveal rate-limiting (30/min sliding window, v0.2.0)
-- [ ] entry rename / reorder, batch edit
+- [x] entry rename + one-click sort (v0.3.0)
+- [ ] batch edit
 - [ ] CSV import bridge, KeePassXC `.kdbx` mirror export for mobile
 - [ ] optional model-facing read-only tools (`vault_list`, structure-only by design)
 

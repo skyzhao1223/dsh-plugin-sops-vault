@@ -172,6 +172,32 @@ export function apply(ctx: Context, config?: VaultPluginConfig): void {
     await sops(['set', '--idempotent', secretsFile, sopsPath(['systems', name, field]), JSON.stringify(value)], 20_000)
   }
 
+  /**
+   * Whole-file round trip: decrypt → jq transform → re-encrypt → verify → atomic
+   * replace, as ONE piped shell command so plaintext never touches the disk.
+   * Used for structural operations sops cannot do in place (rename, sort).
+   */
+  async function roundtrip(filter: string, jqArgs: readonly string[], ms = 20_000): Promise<void> {
+    const tmp = `${secretsFile}.tmp`
+    const parts = [
+      `cd ${quote(vaultDir)}`,
+      [
+        `${quote(sopsBin)} decrypt --input-type yaml --output-type json ${quote(secretsFile)}`,
+        `| jq ${jqArgs.map(quote).join(' ')} ${quote(filter)}`,
+        `| ${quote(sopsBin)} encrypt --input-type json --output-type yaml --filename-override ${quote(secretsFile)} /dev/stdin > ${quote(tmp)}`,
+        `&& ${quote(sopsBin)} decrypt --input-type yaml --output-type json ${quote(tmp)} > /dev/null`,
+        `&& mv ${quote(tmp)} ${quote(secretsFile)}`,
+      ].join(' '),
+    ]
+    const command = `${parts[0]} && { ${parts[1]} || { rm -f ${quote(tmp)}; exit 1; }; }`
+    const spec = shell.resolve({ command, workdir: vaultDir, timeoutMs: ms })
+    const r = await shell.run(spec)
+    if (r?.exitCode !== 0) {
+      const err = typeof r?.stderr?.text === 'string' ? r.stderr.text : ''
+      throw new Error(`roundtrip failed (exit ${String(r?.exitCode ?? '?')}): ${err.slice(0, 300)}`)
+    }
+  }
+
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     try {
       if (!isAllowedOrigin(req.headers.origin, req.headers.host)) {
@@ -284,6 +310,24 @@ export function apply(ctx: Context, config?: VaultPluginConfig): void {
           const out = await git(['-C', vaultDir, 'commit', '-q', '-m', msg], 20_000)
           log('save', msg, req)
           send(res, 200, { ok: true, data: { committed: true, msg: out.split('\n')[0] ?? msg } })
+          return
+        }
+
+        if (route === 'rename') {
+          if (!validateEntryName(body.name)) throw new Error('rename: invalid name')
+          if (!validateEntryName(body.newName)) throw new Error('rename: invalid newName')
+          const meta = parseRawVault(readSecretsRaw())
+          if (meta[body.name] === undefined) throw new Error(`rename: entry not found: ${body.name}`)
+          if (meta[body.newName] !== undefined) throw new Error(`rename: target exists, refusing to overwrite: ${body.newName}`)
+          await roundtrip('.systems[$n] = .systems[$o] | del(.systems[$o])', ['--arg', 'o', body.name, '--arg', 'n', body.newName])
+          log('rename', `${body.name} -> ${body.newName}`, req)
+          send(res, 200, { ok: true, data: { renamed: body.newName } })
+          return
+        }
+        if (route === 'sort') {
+          await roundtrip('.systems = ((.systems // {}) | to_entries | sort_by(.key) | from_entries)', [])
+          log('sort', '*', req)
+          send(res, 200, { ok: true, data: { sorted: true } })
           return
         }
       }
