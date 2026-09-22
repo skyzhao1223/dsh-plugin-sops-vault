@@ -90,6 +90,7 @@ DSH web server 上的一个前缀路由；所有响应都是 `{ok, data|error}` 
 | **浏览器面板（人）** | 元数据随便看；每个明文值都要**明确点击**才经 `reveal` 取回；TOTP 按需生成。 |
 | **其他网页源** | 拒绝：任何带跨源或 `null` Origin 头的请求一律 403。无 Origin 的非浏览器本地调用（你自己的 curl）放行——它们和库文件本来就在同一信任域。 |
 | **磁盘** | 库保持 sops 白名单加密。本插件不在任何地方写明文。 |
+| **批量刮取** | `reveal`/`totp` 共享 30 次/分钟滑动窗口限速（内存态）；超出返回 429 并提示“视 GUI 已失陷”。XSS 页面想扫全库会立刻撞墙。 |
 
 **访问日志**：每次 reveal/totp/set/rm/create/save 追加一行——ISO 时间、动作、目标、来源 IP——
 写入 `<vaultDir>/.git/dsh-vault-audit.log`（放 `.git/` 里所以不影响 git 状态；非 git 库回退到
@@ -122,7 +123,7 @@ Client bundle 遵循 DSH closure-factory 约定（`window.__ModuleLoader__.load`
 
 - [ ] 文案接入 DSH locale 服务（目前是独立中英字典）
 - [ ] README 截图（等真机挂载后补）
-- [ ] reveal 限速（收窄 XSS 爆炸半径）
+- [x] reveal 限速（30 次/分钟滑动窗口，v0.2.0）
 - [ ] 条目重命名 / 排序、批量编辑
 - [ ] CSV 导入桥、KeePassXC `.kdbx` 镜像导出（手机端）
 - [ ] 可选的模型侧只读工具（`vault_list`，设计上仅结构）

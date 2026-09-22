@@ -97,6 +97,7 @@ One prefix route on the DSH web server; every response is `{ok, data|error}` JSO
 | **Browser panel (human)** | Metadata freely; each plaintext value only on an explicit click; TOTP codes on demand. |
 | **Other web origins** | Rejected: any request carrying a cross-origin or `null` `Origin` gets 403. Origin-less callers (your own curl) are allowed — same trust domain as the vault files. |
 | **Disk** | The vault stays sops-encrypted (allowlist mode). The plugin writes no plaintext anywhere. |
+| **Scraping attempts** | `reveal`/`totp` share a 30/min sliding-window rate limit (in-memory); excess gets 429 with a *treat the GUI as compromised* hint. Blunts bulk-scraping by an XSS'd page. |
 
 **Access log**: every reveal/totp/set/rm/create/save appends one line — ISO time, action, target, source
 IP — to `<vaultDir>/.git/dsh-vault-audit.log` (inside `.git/` so git status stays clean; falls back to
@@ -130,7 +131,7 @@ cordis resolved from the platform module table); see `tsdown.config.ts`.
 
 - [ ] wire copy into the DSH locale service (currently standalone zh/en dictionaries)
 - [ ] screenshots in this README (pending a real mounted run)
-- [ ] reveal rate-limiting (XSS blast-radius reduction)
+- [x] reveal rate-limiting (30/min sliding window, v0.2.0)
 - [ ] entry rename / reorder, batch edit
 - [ ] CSV import bridge, KeePassXC `.kdbx` mirror export for mobile
 - [ ] optional model-facing read-only tools (`vault_list`, structure-only by design)
