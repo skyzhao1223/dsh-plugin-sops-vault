@@ -25,6 +25,18 @@ file, no decryption) is the most an agent-side integration should see;
 plaintext values only ever flow Host→browser on an explicit human click.
 ```
 
+## Screenshots
+
+List view (grouped entries, encrypted-field badges, quick actions on hover):
+
+![panel list view](docs/panel-list.png)
+
+Detail drawer with live TOTP ring, plus one-click single-field reveal:
+
+| Drawer + TOTP | Field revealed on click |
+|---|---|
+| ![panel drawer](docs/panel-drawer.png) | ![panel reveal](docs/panel-reveal.png) |
+
 ## Why
 
 Password-manager GUIs (KeePassXC, Bitwarden) are binary-store, human-only tools: no diff, no audit trail,
