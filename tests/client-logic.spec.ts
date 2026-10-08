@@ -4,9 +4,10 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
-  chipValues, encCount, entrySubline, fieldOrder, groupName, groupEntries,
-  hostOf, hueOf, importDefaultNote, importSelectable, importSummaryText,
-  importTargetName, isLinkValue, matchEntry, noteOf, orderGroups, shortName,
+  chipValues, codeCountdown, countByKind, displayCode, encCount, entrySubline,
+  fieldOrder, groupName, groupEntries, hasKind, hostOf, hueOf, importDefaultNote,
+  importSelectable, importSummaryText, importTargetName, isLinkValue, kindsPresent,
+  matchEntry, namesOfKind, noteOf, orderGroups, shortName,
 } from '../src/client/logic.ts'
 import type { FieldMeta, ImportEntry, VaultMeta } from '../src/client/api.ts'
 import { makeT } from '../src/client/i18n.ts'
@@ -167,5 +168,69 @@ describe('import helpers', () => {
     ]
     expect(importSelectable(list).map((e) => e.id)).toEqual(['ok'])
     expect(importSelectable([])).toEqual([])
+  })
+})
+
+describe('data-kind filtering', () => {
+  const totpEntry: Record<string, FieldMeta> = { url: plain('https://a.example'), username: plain('me'), totp: enc() }
+  const emptyTotp: Record<string, FieldMeta> = { totp: plain('') }
+  const pwEntry: Record<string, FieldMeta> = { password: enc(), note: plain('x') }
+  const keyEntry: Record<string, FieldMeta> = { appkey: enc(), token: enc() }
+  const plainOnly: Record<string, FieldMeta> = { url: plain('https://b.example'), env: plain('prod') }
+
+  it('totp needs an ENCRYPTED totp field', () => {
+    expect(hasKind(totpEntry, 'totp')).toBe(true)
+    expect(hasKind(emptyTotp, 'totp')).toBe(false)
+    expect(hasKind(pwEntry, 'totp')).toBe(false)
+  })
+
+  it('password and secret are distinct kinds, and secret ignores totp/password', () => {
+    expect(hasKind(pwEntry, 'password')).toBe(true)
+    expect(hasKind(pwEntry, 'secret')).toBe(false)
+    expect(hasKind(totpEntry, 'secret')).toBe(false)
+    expect(hasKind(keyEntry, 'secret')).toBe(true)
+    expect(hasKind(keyEntry, 'password')).toBe(false)
+  })
+
+  it('plaintext-only entries belong to no kind', () => {
+    expect(hasKind(plainOnly, 'totp')).toBe(false)
+    expect(hasKind(plainOnly, 'password')).toBe(false)
+    expect(hasKind(plainOnly, 'secret')).toBe(false)
+  })
+
+  const META: VaultMeta = { '工作/VPN': totpEntry, '个人/PyPI': totpEntry, '服务/npmjs': keyEntry, '其它/empty': emptyTotp }
+
+  it('counts entries per kind and only offers non-empty chips', () => {
+    expect(countByKind(META)).toEqual({ totp: 2, password: 0, secret: 1 })
+    expect(kindsPresent(META)).toEqual(['totp', 'secret'])
+    expect(kindsPresent({})).toEqual([])
+  })
+
+  it('lists the names of one kind in vault order', () => {
+    expect(namesOfKind(META, 'totp')).toEqual(['工作/VPN', '个人/PyPI'])
+    expect(namesOfKind(META, 'secret')).toEqual(['服务/npmjs'])
+    expect(namesOfKind(META, 'password')).toEqual([])
+  })
+})
+
+describe('live-code countdown', () => {
+  it('ticks down and clamps at zero', () => {
+    expect(codeCountdown(30, 0)).toEqual({ left: 30, frac: 1, expired: false })
+    expect(codeCountdown(30, 12).left).toBe(18)
+    expect(codeCountdown(30, 29)).toEqual({ left: 1, frac: 1 / 30, expired: false })
+    expect(codeCountdown(30, 30)).toEqual({ left: 0, frac: 0, expired: true })
+    expect(codeCountdown(30, 45)).toEqual({ left: 0, frac: 0, expired: true })
+  })
+
+  it('falls back to a 30 s window for a non-positive remain', () => {
+    expect(codeCountdown(0, 5).left).toBe(25)
+    expect(codeCountdown(-3, 0)).toEqual({ left: 30, frac: 1, expired: false })
+  })
+
+  it('groups a 6-digit code for display and leaves anything else alone', () => {
+    expect(displayCode('123456')).toBe('123 456')
+    expect(displayCode('12345678')).toBe('12345678')
+    expect(displayCode('12345')).toBe('12345')
+    expect(displayCode('')).toBe('')
   })
 })

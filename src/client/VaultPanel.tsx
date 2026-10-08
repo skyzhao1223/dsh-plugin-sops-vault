@@ -13,12 +13,13 @@
 import { createElement, useCallback, useEffect, useRef, useState } from 'react'
 import type { ChangeEvent, KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react'
 import { api } from './api.ts'
-import type { FieldMeta, ImportItem, ImportResult, ImportScan, TotpResult, VaultMeta } from './api.ts'
+import type { FieldMeta, ImportItem, ImportResult, ImportScan, TotpBatch, TotpResult, VaultMeta } from './api.ts'
 import {
-  chipValues, encCount, entrySubline, fieldOrder, groupEntries,
-  hueOf, importDefaultNote, importSelectable, importSummaryText, importTargetName,
-  isLinkValue, matchEntry, noteOf, shortName,
+  chipValues, codeCountdown, countByKind, displayCode, encCount, entrySubline, fieldOrder, groupEntries,
+  hasKind, hueOf, importDefaultNote, importSelectable, importSummaryText, importTargetName,
+  isLinkValue, kindsPresent, matchEntry, noteOf, shortName,
 } from './logic.ts'
+import type { DataKind } from './logic.ts'
 import { detectLang, makeT } from './i18n.ts'
 import type { CopyKey } from './i18n.ts'
 
@@ -36,6 +37,9 @@ const LANG_Q = `?lang=${lang}`
 const tStr = (k: string, p?: Record<string, string | number>): string => t(k as CopyKey, p)
 
 const MASK = '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022'
+
+/** Chip label of each data kind. */
+const KIND_LABEL: Record<DataKind, CopyKey> = { totp: 'kindTotp', password: 'kindPassword', secret: 'kindSecret' }
 
 /* ---------- icons ---------- */
 
@@ -79,6 +83,26 @@ async function copyText(text: string): Promise<boolean> {
   }
 }
 
+/* ---------- countdown ring ---------- */
+
+/**
+ * The 30-second countdown ring, shared by the drawer widget and the codes view.
+ * @param frac - remaining fraction of the window, 0..1.
+ * @param urgent - true for the last few seconds (the ring turns red).
+ * @param size - rendered edge in pixels.
+ */
+function CountdownRing({ frac, urgent, size = 42 }: { frac: number; urgent: boolean; size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden="true" style={{ flexShrink: 0 }}>
+      <circle cx={16} cy={16} r={13} fill="none" stroke="var(--dsw-alias-border-l1,#2a3040)" strokeWidth={3} />
+      <circle cx={16} cy={16} r={13} fill="none"
+        stroke={urgent ? 'var(--dsw-alias-state-error-primary,#ff5c5c)' : 'var(--dsw-alias-brand-primary,#4c8dff)'}
+        strokeWidth={3} strokeLinecap="round" strokeDasharray={81.7} strokeDashoffset={81.7 * (1 - frac)}
+        transform="rotate(-90 16 16)" style={{ transition: 'stroke-dashoffset 1s linear' }} />
+    </svg>
+  )
+}
+
 /* ---------- TOTP widget ---------- */
 
 function TotpWidget({ name, onCopy }: { name: string; onCopy: (text: string, label: string) => void }) {
@@ -109,19 +133,183 @@ function TotpWidget({ name, onCopy }: { name: string; onCopy: (text: string, lab
   const frac = remain > 0 ? Math.max(0, Math.min(1, left / remain)) : 0
   return (
     <div className="vp-totp">
-      <svg width={42} height={42} viewBox="0 0 32 32" aria-hidden="true">
-        <circle cx={16} cy={16} r={13} fill="none" stroke="var(--dsw-alias-border-l1,#2a3040)" strokeWidth={3} />
-        <circle cx={16} cy={16} r={13} fill="none"
-          stroke={left <= 5 ? 'var(--dsw-alias-state-error-primary,#ff5c5c)' : 'var(--dsw-alias-brand-primary,#4c8dff)'}
-          strokeWidth={3} strokeLinecap="round" strokeDasharray={81.7} strokeDashoffset={81.7 * (1 - frac)}
-          transform="rotate(-90 16 16)" style={{ transition: 'stroke-dashoffset 1s linear' }} />
-      </svg>
+      <CountdownRing frac={frac} urgent={left <= 5} />
       <span className="vp-totp-code" title={t('clickToCopy')} role="button" tabIndex={0}
         onClick={() => { if (/^\d+$/.test(code)) void onCopy(code, `${name} ${t('totpCopyLabel')}`) }}
         onKeyDown={(e: ReactKeyboardEvent) => { if (e.key === 'Enter' && /^\d+$/.test(code)) void onCopy(code, `${name} ${t('totpCopyLabel')}`) }}>
         {code || '\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7'}
       </span>
       <span className="vp-totp-left">{left > 0 ? t('totpRefreshIn', { n: left }) : t('totpRefreshing')}</span>
+    </div>
+  )
+}
+
+/* ---------- live-codes view ---------- */
+
+/** Rotation-window index: codes fetched inside one window are still valid. */
+function rotationWindow(now = Date.now()): number {
+  return Math.floor(now / 30_000)
+}
+
+/**
+ * Module scope on purpose. The host caps `totp-batch` at 10 requests/min, so
+ * remounting this view (toggling the kind chip, closing a drawer) must reuse
+ * the codes of the current rotation instead of spending another request.
+ */
+let codeCache: { window: number; namesKey: string; data: TotpBatch; at: number } | null = null
+
+interface CodesViewProps {
+  /** Entry names to show — already filtered by kind and search. */
+  names: readonly string[]
+  meta: VaultMeta
+  onCopy: (text: string, label: string) => void
+  onOpen: (name: string) => void
+}
+
+/**
+ * Authenticator-style list: every visible entry's live code at once.
+ *
+ * One host call per 30 s rotation for the WHOLE list (never one per entry, and
+ * never a per-row timer), one shared 1 s ticker for the rings, and no fetching
+ * while the tab is hidden. Codes are derived host-side; seeds never arrive.
+ */
+function CodesView({ names, meta, onCopy, onOpen }: CodesViewProps) {
+  const namesKey = [...names].sort().join('\u0000')
+  const [data, setData] = useState<TotpBatch | null>(null)
+  const [err, setErr] = useState('')
+  const [stale, setStale] = useState(false)
+  const [elapsed, setElapsed] = useState(0)
+  const fetching = useRef(false)
+  const attempted = useRef(-1)
+  const namesRef = useRef<readonly string[]>(names)
+  const dataRef = useRef<TotpBatch | null>(null)
+
+  // declared before the load effect so the ref is current when a fetch starts
+  useEffect(() => { namesRef.current = names }, [names])
+
+  const load = useCallback((force: boolean) => {
+    if (fetching.current) return
+    const win = rotationWindow()
+    attempted.current = win
+    const cached = codeCache
+    if (!force && cached !== null && cached.window === win && cached.namesKey === namesKey) {
+      dataRef.current = cached.data
+      setData(cached.data)
+      // resume the countdown where the cached fetch left off — resetting it to
+      // zero would show a full ring for a code that is about to rotate.
+      setElapsed(Math.max(0, Math.floor((Date.now() - cached.at) / 1000)))
+      setErr('')
+      setStale(false)
+      return
+    }
+    fetching.current = true
+    api<TotpBatch>('totp-batch', { names: [...namesRef.current] }).then(
+      (d) => {
+        codeCache = { window: rotationWindow(), namesKey, data: d, at: Date.now() }
+        dataRef.current = d
+        setData(d)
+        setElapsed(0)
+        setErr('')
+        setStale(false)
+      },
+      (e: unknown) => {
+        setErr(String((e as Error | undefined)?.message ?? e).slice(0, 120))
+        // Keep the previous codes on screen: a rate-limited (429) user should
+        // still see something — at most one rotation old — not an empty view.
+        setStale(dataRef.current !== null)
+      },
+    ).finally(() => { fetching.current = false })
+  }, [namesKey])
+
+  useEffect(() => { load(false) }, [load])
+
+  // one shared ticker for every ring in the list
+  useEffect(() => {
+    const id = window.setInterval(() => setElapsed((x) => x + 1), 1000)
+    return () => window.clearInterval(id)
+  }, [])
+
+  // when the rotation ends, re-fetch exactly once for the whole list
+  useEffect(() => {
+    if (data === null || document.hidden) return
+    const expired = Object.values(data.codes).some((c) => codeCountdown(c.remain, elapsed).expired)
+    if (!expired) return
+    if (attempted.current === rotationWindow()) return
+    load(false)
+  }, [elapsed, data, load])
+
+  // a hidden tab never polled, so its codes are stale: refresh on return
+  useEffect(() => {
+    const onVis = (): void => {
+      if (document.hidden) return
+      attempted.current = -1
+      load(false)
+    }
+    document.addEventListener('visibilitychange', onVis)
+    return () => document.removeEventListener('visibilitychange', onVis)
+  }, [load])
+
+  const codes = data?.codes ?? {}
+  let body: ReactNode
+  if (data === null && err === '') {
+    body = <div className="vp-empty">{t('codesLoading')}</div>
+  } else if (data === null) {
+    body = (
+      <div className="vp-empty">
+        <div className="vp-err" style={{ marginBottom: 11 }}>{t('codesLoadFail')}{err}</div>
+        <button className="vp-btn" onClick={() => load(true)}><Glyph n="refresh" s={12} />{t('retry')}</button>
+      </div>
+    )
+  } else {
+    body = (
+      <div className="vp-codes">
+        {names.map((n) => {
+          const c = codes[n]
+          const fs = meta[n]
+          const cd = c === undefined ? null : codeCountdown(c.remain, elapsed)
+          const sub = fs === undefined ? '' : entrySubline(fs)
+          const copy = (): void => {
+            if (c !== undefined) onCopy(c.code, `${n} ${t('totpCopyLabel')}`)
+          }
+          return (
+            <div key={n} className="vp-code">
+              <div className="vp-av" aria-hidden="true" style={{ background: `hsl(${String(hueOf(n))},52%,42%)` }}>{shortName(n).slice(0, 1).toUpperCase()}</div>
+              <div className="vp-code-main">
+                <div className="vp-code-name" role="button" tabIndex={0} title={n} onClick={() => onOpen(n)}
+                  onKeyDown={(e: ReactKeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(n) } }}>
+                  {shortName(n)}
+                </div>
+                {sub !== '' ? <div className="vp-code-sub" title={sub}>{sub}</div> : null}
+              </div>
+              {c !== undefined && cd !== null ? (
+                <>
+                  <CountdownRing frac={cd.frac} urgent={cd.left <= 5} size={34} />
+                  <span className="vp-code-val" role="button" tabIndex={0} title={t('clickToCopy')} onClick={copy}
+                    onKeyDown={(e: ReactKeyboardEvent) => { if (e.key === 'Enter') copy() }}>
+                    {displayCode(c.code)}
+                  </span>
+                  <span className="vp-code-left">{cd.left > 0 ? t('codesLeft', { n: cd.left }) : t('totpRefreshing')}</span>
+                </>
+              ) : <span className="vp-code-miss">{t('codesMissing')}</span>}
+            </div>
+          )
+        })}
+      </div>
+    )
+  }
+
+  return (
+    <div>
+      <div className="vp-codes-bar">
+        <span>{t('codesTitle', { n: names.length })}</span>
+        {stale ? <span className="vp-codes-stale">{t('codesStale')}</span> : null}
+        {!stale && err !== '' ? <span className="vp-codes-stale">{err}</span> : null}
+        <button className="vp-btn" style={{ marginLeft: 'auto' }} onClick={() => load(true)} disabled={fetching.current}>
+          <Glyph n="refresh" s={12} />{t('refresh')}
+        </button>
+      </div>
+      {body}
+      <div className="vp-hint" style={{ marginTop: 2 }}>{t('codesHint')}</div>
     </div>
   )
 }
@@ -621,6 +809,7 @@ export function VaultPanel() {
   const [meta, setMeta] = useState<VaultMeta | null>(null)
   const [err, setErr] = useState('')
   const [q, setQ] = useState('')
+  const [kind, setKind] = useState<DataKind | ''>('')
   const [sel, setSel] = useState('')
   const [secrets, setSecrets] = useState<Record<string, string>>({})
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
@@ -733,6 +922,7 @@ export function VaultPanel() {
       if (newOpen) { setNewOpen(false); return }
       if (sel !== '') { setSel(''); return }
       if (q !== '') { setQ(''); return }
+      if (kind !== '') { setKind(''); return }
     }
     const tag = (e.target as HTMLElement | null)?.tagName ?? ''
     if ((e.key === '/' || ((e.metaKey || e.ctrlKey) && e.key === 'k')) && tag !== 'INPUT' && tag !== 'TEXTAREA') {
@@ -757,7 +947,8 @@ export function VaultPanel() {
     )
   } else {
     const ql = q.trim().toLowerCase()
-    const visible = Object.keys(meta).filter((n) => matchEntry(meta[n]!, n, ql))
+    const matched = Object.keys(meta).filter((n) => matchEntry(meta[n]!, n, ql))
+    const visible = kind === '' ? matched : matched.filter((n) => hasKind(meta[n]!, kind))
     const row = (n: string) => {
       const fs = meta[n]!
       const short = shortName(n)
@@ -788,7 +979,13 @@ export function VaultPanel() {
         </div>
       )
     }
-    body = (
+    body = kind === 'totp' ? (
+      <div className="vp-body">
+        {visible.length === 0 ? (
+          <div className="vp-empty">{ql !== '' ? t('noMatch', { q }) : t('kindNone')}</div>
+        ) : <CodesView names={visible} meta={meta} onCopy={onCopy} onOpen={setSel} />}
+      </div>
+    ) : (
       <div className="vp-body">
         <div className="vp-sub">{t('subline')}</div>
         {groupEntries(meta, visible, t('groupFallback')).map(([g, names]) => (
@@ -801,7 +998,9 @@ export function VaultPanel() {
           </div>
         ))}
         {visible.length === 0 ? (
-          <div className="vp-empty">{ql !== '' ? t('noMatch', { q }) : t('emptyVault')}</div>
+          <div className="vp-empty">
+            {ql !== '' ? t('noMatch', { q }) : (kind !== '' ? t('kindNone') : t('emptyVault'))}
+          </div>
         ) : null}
       </div>
     )
@@ -809,6 +1008,7 @@ export function VaultPanel() {
 
   const totalEnc = meta === null ? 0 : Object.values(meta).reduce((acc, fs) => acc + encCount(fs), 0)
   const total = meta === null ? 0 : Object.keys(meta).length
+  const counts = meta === null ? null : countByKind(meta)
 
   return (
     <div className="vp-root" onKeyDown={onKey} tabIndex={-1}>
@@ -829,6 +1029,19 @@ export function VaultPanel() {
         <button className="vp-btn" onClick={() => setAuditOpen(true)}><Glyph n="shield" s={12} />{t('audit')}</button>
         <button className="vp-btn vp-btn-pri" onClick={() => setNewOpen(true)}><Glyph n="plus" s={12} />{t('create')}</button>
       </div>
+      {meta !== null && counts !== null ? (
+        <div className="vp-kinds" role="group" aria-label={t('kindFilterLabel')}>
+          <button className={`vp-kchip${kind === '' ? ' vp-kchip-on' : ''}`} aria-pressed={kind === ''} onClick={() => setKind('')}>
+            {t('kindAll')}<span className="vp-kchip-n">{total}</span>
+          </button>
+          {kindsPresent(meta).map((k) => (
+            <button key={k} className={`vp-kchip${kind === k ? ' vp-kchip-on' : ''}`} aria-pressed={kind === k}
+              title={t('kindFilterLabel')} onClick={() => setKind((prev) => (prev === k ? '' : k))}>
+              {t(KIND_LABEL[k])}<span className="vp-kchip-n">{counts[k]}</span>
+            </button>
+          ))}
+        </div>
+      ) : null}
       {body}
       {sel !== '' && meta !== null && meta[sel] !== undefined ? <div className="vp-backdrop" onClick={() => setSel('')} /> : null}
       {sel !== '' && meta !== null && meta[sel] !== undefined ? (

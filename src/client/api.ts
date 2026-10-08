@@ -23,6 +23,20 @@ export interface TotpResult {
   remain: number
 }
 
+/**
+ * `totp-batch` payload: many live codes from ONE host-side decryption, for the
+ * 动态码 view. Requested entries without a usable seed are listed in `missing`.
+ * Seeds never cross the API — only the derived 30-second codes do.
+ */
+export interface TotpBatch {
+  /** Entry name → live code. */
+  codes: Record<string, TotpResult>
+  /** Requested names that produced no code (missing/invalid seed). */
+  missing: string[]
+  /** Host epoch ms when the codes were computed. */
+  at: number
+}
+
 /** One browser-profile storage area of the Authenticator extension. */
 export interface ImportSource {
   /** Browser family (`chrome`, `edge`, …). */

@@ -11,6 +11,7 @@
 │    · 详情抽屉：单字段 👁 显示 / 复制 / 编辑 / 删除                        │
 │    · TOTP 环形倒计时 · 新建条目 · 安全审计 · 访问日志 · 中英双语          │
 │    · 一键导入浏览器 Authenticator 扩展里的动态码种子                      │
+│    · 按种类筛选：只看动态码的实时验证码视图（像验证器 App）                │
 └──────────────┬─────────────────────────────────────────────────────────┘
                │ 同源 fetch（Origin 校验）
 ┌──────────────▼───────────────┐        ┌──────────────────────────────┐
@@ -65,7 +66,7 @@
 git clone https://github.com/skyzhao1223/dsh-plugin-sops-vault && cd dsh-plugin-sops-vault
 pnpm install
 pnpm build          # tsc（node 半 + 类型）+ tsdown（浏览器 bundle）
-pnpm test           # 87 个单元测试
+pnpm test           # 95 个单元测试
 pnpm verify         # 对构建产物做加载路径验证
 
 dsh web --patch "$PWD/cordis.yml"
@@ -99,9 +100,11 @@ DSH web server 上的一个前缀路由；所有响应都是 `{ok, data|error}` 
 | `/vault-api/meta` | GET | 全库结构，**不解密**直接解析加密文件 |
 | `/vault-api/reveal` | POST | 单字段明文（`{name, field}`）——仅供人点击触发 |
 | `/vault-api/totp` | POST | 当前 6 位动态码，Host 端用存储的种子计算 |
+| `/vault-api/totp-batch` | POST | **一次解密**算出多条目的实时动态码（`{names?}`）——「动态码」视图的后端 |
 | `/vault-api/audit` | GET | 白名单/泄漏审计报告 |
 | `/vault-api/audit-log` | GET | 访问日志尾部 |
 | `/vault-api/set` / `rm` / `create` / `save` | POST | 字段写入 / 删除 / 新建条目 / git 提交 |
+| `/vault-api/rename` / `sort` | POST | 重命名单条 / 全库重排序 |
 | `/vault-api/dirty` | GET | git 脏状态 |
 | `/vault-api/import-scan` | GET | 扫描浏览器 Authenticator 扩展里的动态码条目（`?lang=zh|en` 决定原因文案语言） |
 | `/vault-api/import-apply` | POST | 把勾选的条目写进库（`{items:[{id,name,username,url,note,overwrite}]}`） |
@@ -131,6 +134,7 @@ RFC6238 类型（HOTP、Steam、Battle.net）。参数非默认值的条目可�
 | **其他网页源** | 拒绝：任何带跨源或 `null` Origin 头的请求一律 403。无 Origin 的非浏览器本地调用（你自己的 curl）放行——它们和库文件本来就在同一信任域。 |
 | **磁盘** | 库保持 sops 白名单加密。本插件不在任何地方写明文。 |
 | **批量刮取** | `reveal`/`totp` 共享 30 次/分钟滑动窗口限速（内存态）；超出返回 429 并提示“视 GUI 已失陷”。XSS 页面想扫全库会立刻撞墙。 |
+| **实时验证码视图** | `totp-batch` 在 Host 内存里解密一次（暴露面与既有 `roundtrip` 相同），只返回派生出的 30 秒验证码，**绝不返回种子**。独立 10 次/分钟上限；视图每轮转拉一次，标签页隐藏时暂停。 |
 | **浏览器导入** | 扩展存储只读打开；种子全程留在 Host 侧（API 只传 `secretLen`，绝不传种子），直接落进 sops 加密库。scan/apply 另有 12 次/分钟上限。 |
 
 **访问日志**：每次 reveal/totp/set/rm/create/save 追加一行——ISO 时间、动作、目标、来源 IP——

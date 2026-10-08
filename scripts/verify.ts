@@ -148,6 +148,27 @@ for (const [label, execution] of [
   check('timeout/kill is diagnosed in the error', json.ok === false && /timed out/.test(json.error ?? '') && /SIGKILL/.test(json.error ?? ''), json.error)
 }
 
+{
+  // totp-batch: ONE decryption yields every code; entries without a seed are reported missing
+  let r4: typeof route = null
+  const doc = JSON.stringify({ systems: { '工作/VPN': { totp: 'JBSWY3DPEHPK3PXP', password: 'p' }, '服务/npmjs': { totp: '' } } })
+  const shell4 = {
+    resolve: (r: { command: string }) => { commands.push(r.command); return r },
+    run: async () => ({ exitCode: 0, stdout: { text: `${doc}\n` }, stderr: { text: '' } }),
+  }
+  plugin.apply({ shell: shell4, webServer: { register: (r: typeof route) => { r4 = r; return () => {} } } } as never, { vaultDir: dir })
+  const before = commands.length
+  const res = mockRes()
+  await r4!.handler(mockReq('POST', '/vault-api/totp-batch', { names: ['工作/VPN', '服务/npmjs'] }), res)
+  const json = JSON.parse(res.body) as ApiResponse
+  const codes = Object.keys(json.data?.codes ?? {})
+  check('POST totp-batch in one sops call', json.ok === true && codes.length === 1 && codes[0] === '工作/VPN'
+    && /^\d{6}$/.test(String(json.data?.codes?.['工作/VPN']?.code ?? ''))
+    && JSON.stringify(json.data?.missing) === JSON.stringify(['服务/npmjs'])
+    && commands.length - before === 1, res.body.slice(0, 140))
+  check('totp-batch never returns the seed', !res.body.includes('JBSWY3DPEHPK3PXP'))
+}
+
 rmSync(dir, { recursive: true, force: true })
 
 if (failures > 0) {

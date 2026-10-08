@@ -190,36 +190,39 @@ export function apply(ctx: Context, config?: VaultPluginConfig): () => void {
     run([quote(gitBin), ...args.map(quote)].join(' '), ms)
 
   /**
-   * Sliding-window rate limit for plaintext-returning endpoints (reveal/totp).
+   * Sliding-window rate limiter factory for plaintext-returning endpoints.
    * A human clicks at most a few per minute; a scripted burst (e.g. XSS inside
    * the GUI scraping every secret) hits the ceiling immediately. In-memory per
    * mount — deliberately not persisted.
+   * @param limit - requests allowed per {@link WINDOW_MS}.
    */
-  const REVEAL_LIMIT = 30
-  const REVEAL_WINDOW_MS = 60_000
-  const revealTimes: number[] = []
-  function allowReveal(): boolean {
-    const now = Date.now()
-    while (revealTimes.length > 0 && now - (revealTimes[0] ?? 0) > REVEAL_WINDOW_MS) revealTimes.shift()
-    if (revealTimes.length >= REVEAL_LIMIT) return false
-    revealTimes.push(now)
-    return true
+  const WINDOW_MS = 60_000
+  function limiter(limit: number): () => boolean {
+    const times: number[] = []
+    return () => {
+      const now = Date.now()
+      while (times.length > 0 && now - (times[0] ?? 0) > WINDOW_MS) times.shift()
+      if (times.length >= limit) return false
+      times.push(now)
+      return true
+    }
   }
 
+  /** reveal/totp: one plaintext value per call. */
+  const allowReveal = limiter(30)
+
   /**
-   * Separate, tighter ceiling for the browser-import routes: a scan reads the
-   * user's 2FA metadata, an apply writes many fields at once. A human does this
-   * a handful of times a day; a scripted burst is not a human.
+   * Tighter ceiling for the browser-import routes: a scan reads the user's 2FA
+   * metadata, an apply writes many fields at once. A human does this a handful
+   * of times a day; a scripted burst is not a human.
    */
-  const IMPORT_LIMIT = 12
-  const importTimes: number[] = []
-  function allowImport(): boolean {
-    const now = Date.now()
-    while (importTimes.length > 0 && now - (importTimes[0] ?? 0) > REVEAL_WINDOW_MS) importTimes.shift()
-    if (importTimes.length >= IMPORT_LIMIT) return false
-    importTimes.push(now)
-    return true
-  }
+  const allowImport = limiter(12)
+
+  /**
+   * totp-batch: ONE call yields every live code, so it gets its own smaller
+   * budget. The 动态码 view polls it once per 30 s rotation (~2/min).
+   */
+  const allowTotpBatch = limiter(10)
 
   function log(action: string, target: string, req: IncomingMessage): void {
     try {
@@ -237,6 +240,27 @@ export function apply(ctx: Context, config?: VaultPluginConfig): () => void {
   async function extractField(name: string, field: string): Promise<string> {
     const out = await sops(['decrypt', '--extract', sopsPath(['systems', name, field]), secretsFile])
     return out.replace(/\n+$/, '')
+  }
+
+  /** Decrypted whole-vault document shape (only `systems` is of interest). */
+  interface VaultDoc {
+    systems?: Record<string, Record<string, unknown>>
+  }
+
+  /**
+   * Decrypt the whole vault to JSON in host memory — one `sops` invocation
+   * instead of one per field, for the batch TOTP view. The plaintext lives only
+   * in this process for the duration of the call (same exposure as the existing
+   * `roundtrip` helper); it is never written to disk, logged, or returned
+   * wholesale — callers project exactly the derived value they need.
+   */
+  async function decryptDoc(): Promise<VaultDoc> {
+    const out = await sops(['decrypt', '--output-type', 'json', secretsFile], 20_000)
+    const parsed: unknown = JSON.parse(out)
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      throw new Error('vault document is not a mapping')
+    }
+    return parsed as VaultDoc
   }
 
   async function setField(name: string, field: string, value: string): Promise<void> {
@@ -343,6 +367,34 @@ export function apply(ctx: Context, config?: VaultPluginConfig): () => void {
           if (!result) throw new Error('totp: no usable seed stored for this entry')
           log('totp', body.name, req)
           send(res, 200, { ok: true, data: result })
+          return
+        }
+        if (route === 'totp-batch') {
+          if (!allowTotpBatch()) {
+            send(res, 429, { ok: false, error: 'totp-batch rate limit exceeded (10/min); one call already covers every entry' })
+            return
+          }
+          const rawNames: unknown = body.names
+          let want: string[] | null = null
+          if (rawNames !== undefined) {
+            if (!Array.isArray(rawNames) || rawNames.length > 500) throw new Error('totp-batch: names must be an array of at most 500 entry names')
+            want = rawNames.filter((n): n is string => validateEntryName(n))
+          }
+          const doc = await decryptDoc()
+          const codes: Record<string, { code: string; remain: number }> = {}
+          for (const [name, fields] of Object.entries(doc.systems ?? {})) {
+            if (want !== null && !want.includes(name)) continue
+            const seed = typeof fields?.totp === 'string' ? fields.totp.trim() : ''
+            const result = seed === '' ? null : totpFromSeed(seed)
+            if (result !== null) codes[name] = result
+          }
+          // Report requested-but-codeless entries so the view can explain them.
+          const missing: string[] = []
+          if (want !== null) {
+            for (const n of want) if (codes[n] === undefined) missing.push(n)
+          }
+          log('totp-batch', `${String(Object.keys(codes).length)} codes`, req)
+          send(res, 200, { ok: true, data: { codes, missing, at: Date.now() } })
           return
         }
         if (route === 'set') {

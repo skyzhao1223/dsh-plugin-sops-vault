@@ -110,6 +110,19 @@ const ZH = {
   importSumOk: '✓ 已导入 {n} 条',
   importSumSkip: '跳过 {n} 条（{first}）',
   importSumNone: '没有导入任何条目',
+  kindFilterLabel: '只看某类数据',
+  kindAll: '全部',
+  kindTotp: '动态码',
+  kindPassword: '密码',
+  kindSecret: '密钥令牌',
+  kindNone: '没有这类数据的条目',
+  codesTitle: '{n} 条动态码',
+  codesLoading: '正在计算动态码…',
+  codesLoadFail: '动态码加载失败：',
+  codesStale: '已达请求上限，显示的是上一次的验证码',
+  codesMissing: '无可用种子',
+  codesLeft: '{n}s',
+  codesHint: '验证码由 Host 端用库里的种子实时算出，种子不出 Host；每 30 秒轮换一次，标签页隐藏时暂停拉取。',
 } as const
 
 const EN: Record<keyof typeof ZH, string> = {
@@ -213,6 +226,19 @@ const EN: Record<keyof typeof ZH, string> = {
   importSumOk: '✓ Imported {n}',
   importSumSkip: 'skipped {n} ({first})',
   importSumNone: 'Nothing was imported',
+  kindFilterLabel: 'Show only one kind of data',
+  kindAll: 'All',
+  kindTotp: 'Codes',
+  kindPassword: 'Passwords',
+  kindSecret: 'Secrets',
+  kindNone: 'No entries of this kind',
+  codesTitle: '{n} codes',
+  codesLoading: 'Computing codes…',
+  codesLoadFail: 'Codes failed to load: ',
+  codesStale: 'Request limit reached — showing the previously fetched codes',
+  codesMissing: 'no usable seed',
+  codesLeft: '{n}s',
+  codesHint: 'Codes are derived host-side from the stored seeds; a seed never reaches the browser. They rotate every 30 s, and fetching pauses while the tab is hidden.',
 }
 
 export type CopyKey = keyof typeof ZH

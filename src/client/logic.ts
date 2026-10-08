@@ -125,6 +125,69 @@ export function groupEntries(meta: VaultMeta, visible: readonly string[], fallba
   return orderGroups(Object.keys(groups)).map((g) => [g, groups[g]!] as [string, string[]])
 }
 
+/* ---------- data-kind filtering ("只看某类数据") ---------- */
+
+/**
+ * The kinds one entry can be filtered by. `totp` is the headline case: the
+ * panel renders it as a live-codes list instead of the ordinary entry grid.
+ */
+export type DataKind = 'totp' | 'password' | 'secret'
+
+/** Kinds in chip order. */
+export const DATA_KINDS: readonly DataKind[] = ['totp', 'password', 'secret']
+
+/** Encrypted field names that mean "an API key / token / credential". */
+const SECRET_FIELD_RE = /(token|secret|key|credential|cookie|session|private|passwd|passwd2|apiv3|sign|salt|seed|dsn)/i
+
+/**
+ * Does one entry carry this kind of data?
+ * - `totp`: an encrypted `totp` field (an empty one is plaintext, so no ring)
+ * - `password`: an encrypted `password` field
+ * - `secret`: any OTHER encrypted field with a credential-ish name
+ */
+export function hasKind(fields: Record<string, FieldMeta>, kind: DataKind): boolean {
+  if (kind === 'totp') return fields.totp?.enc === true
+  if (kind === 'password') return fields.password?.enc === true
+  return Object.entries(fields).some(([k, f]) => f.enc && k !== 'totp' && k !== 'password' && SECRET_FIELD_RE.test(k))
+}
+
+/** Entry count per kind, for the chip badges. */
+export function countByKind(meta: VaultMeta): Record<DataKind, number> {
+  const out = { totp: 0, password: 0, secret: 0 } as Record<DataKind, number>
+  for (const fields of Object.values(meta)) {
+    for (const kind of DATA_KINDS) if (hasKind(fields, kind)) out[kind] += 1
+  }
+  return out
+}
+
+/** Kinds worth offering as a chip (at least one entry has it). */
+export function kindsPresent(meta: VaultMeta): DataKind[] {
+  const counts = countByKind(meta)
+  return DATA_KINDS.filter((k) => counts[k] > 0)
+}
+
+/** Names of the entries carrying one kind, in vault order. */
+export function namesOfKind(meta: VaultMeta, kind: DataKind): string[] {
+  return Object.keys(meta).filter((n) => hasKind(meta[n]!, kind))
+}
+
+/**
+ * Live countdown for one code of a batch fetch: the host reported `remain`
+ * seconds at fetch time, the view ticks `elapsedSec` locally.
+ * @returns seconds left (clamped at 0), ring fraction, and whether the code has
+ *   rotated and must be re-fetched.
+ */
+export function codeCountdown(remain: number, elapsedSec: number): { left: number; frac: number; expired: boolean } {
+  const total = remain > 0 ? remain : 30
+  const left = Math.max(0, Math.ceil(total - elapsedSec))
+  return { left, frac: Math.max(0, Math.min(1, left / total)), expired: total - elapsedSec <= 0 }
+}
+
+/** Group a 6-digit code for display (`123456` → `123 456`); other lengths pass through. */
+export function displayCode(code: string): string {
+  return /^\d{6}$/.test(code) ? `${code.slice(0, 3)} ${code.slice(3)}` : code
+}
+
 /* ---------- Authenticator import ---------- */
 
 /** Strip surrounding whitespace and slashes off one name part. */

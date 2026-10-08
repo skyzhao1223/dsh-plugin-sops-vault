@@ -13,6 +13,7 @@ first-class sidebar panel of the DSH Web GUI — with a hard security boundary b
 │    · detail drawer: per-field 👁 reveal / copy / edit / delete         │
 │    · live TOTP with countdown ring · entry creation · security audit   │
 │    · one-click import of browser Authenticator seeds                   │
+│    · kind filter: a TOTP-only live-codes view (authenticator style)    │
 │    · access log (values never logged) · zh/en UI                       │
 └──────────────┬─────────────────────────────────────────────────────────┘
                │ same-origin fetch (Origin-checked)
@@ -69,7 +70,7 @@ No other CLI or daemon is required — the plugin drives `sops` and `git` direct
 git clone https://github.com/skyzhao1223/dsh-plugin-sops-vault && cd dsh-plugin-sops-vault
 pnpm install
 pnpm build          # tsc (node half + types) + tsdown (browser bundle)
-pnpm test           # 87 unit tests
+pnpm test           # 95 unit tests
 pnpm verify         # load-path check against the built artifact
 
 dsh web --patch "$PWD/cordis.yml"
@@ -104,9 +105,11 @@ One prefix route on the DSH web server; every response is `{ok, data|error}` JSO
 | `/vault-api/meta` | GET | whole-vault structure, parsed from the encrypted file **without decrypting** |
 | `/vault-api/reveal` | POST | one field's plaintext (`{name, field}`) — human-click only |
 | `/vault-api/totp` | POST | current 6-digit code, computed host-side from the stored seed |
+| `/vault-api/totp-batch` | POST | live codes for many entries from **one** decryption (`{names?}`) — backs the 动态码 view |
 | `/vault-api/audit` | GET | allowlist/leak audit report |
 | `/vault-api/audit-log` | GET | tail of the access log |
 | `/vault-api/set` / `rm` / `create` / `save` | POST | field write / delete / new entry / git commit |
+| `/vault-api/rename` / `sort` | POST | rename one entry / re-sort all entries |
 | `/vault-api/dirty` | GET | git dirty state |
 | `/vault-api/import-scan` | GET | TOTP entries found in the browser's Authenticator extension (`?lang=zh|en` localizes reasons) |
 | `/vault-api/import-apply` | POST | write the selected entries into the vault (`{items:[{id,name,username,url,note,overwrite}]}`) |
@@ -139,6 +142,7 @@ SHA-1 / 6 digits / 30 s.
 | **Other web origins** | Rejected: any request carrying a cross-origin or `null` `Origin` gets 403. Origin-less callers (your own curl) are allowed — same trust domain as the vault files. |
 | **Disk** | The vault stays sops-encrypted (allowlist mode). The plugin writes no plaintext anywhere. |
 | **Scraping attempts** | `reveal`/`totp` share a 30/min sliding-window rate limit (in-memory); excess gets 429 with a *treat the GUI as compromised* hint. Blunts bulk-scraping by an XSS'd page. |
+| **Live-codes view** | `totp-batch` decrypts the vault once in host memory (the same exposure `roundtrip` already has) and returns only derived 30-second codes — never a seed. Its own 10/min ceiling; the view polls once per rotation and pauses while the tab is hidden. |
 | **Browser import** | The extension store is opened read-only; seeds stay host-side (the API carries `secretLen`, never a seed) and land directly in the sops-encrypted vault. Scan+apply share their own 12/min ceiling. |
 
 **Access log**: every reveal/totp/set/rm/create/save appends one line — ISO time, action, target, source
