@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-sops-vault",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "DeepSeek Harness plugin: manage a local sops+age encrypted credential vault from a sidebar panel. Agents see structure only; plaintext flows only on human click.",
   "type": "module",
   "main": "lib/index.js",
@@ -14,16 +14,24 @@
       "types": "./lib/types/client/index.d.ts",
       "default": "./lib/client.js"
     },
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json",
+    "./icon.svg": "./icon.svg"
   },
   "files": [
     "lib",
     "README.md",
     "README.zh.md",
     "LICENSE",
-    "cordis.yml"
+    "cordis.yml",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg"
   ],
   "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
     "client": {
       "platform": "web"
     }
@@ -64,5 +72,6 @@
   "publishConfig": {
     "registry": "https://registry.npmjs.org/",
     "access": "public"
-  }
+  },
+  "icon": "./icon.svg"
 }

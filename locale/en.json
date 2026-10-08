@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "SOPS Vault",
+    "description": "Manage a local sops+age encrypted credential vault from a sidebar panel. Agents see structure only; plaintext flows only on human click."
+  }
+}

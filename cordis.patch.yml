@@ -1,0 +1,6 @@
+# Bundle patch: inserts the vault panel row into any profile that installs this
+# package. The row resolves the plugin by its bare package name; config is left
+# empty so vaultDir defaults to ~/Vault (override per-install if needed).
+- insert:
+    - id: vault-panel
+      name: dsh-plugin-sops-vault

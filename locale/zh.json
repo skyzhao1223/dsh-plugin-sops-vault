@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "SOPS 密码库",
+    "description": "侧边栏面板管理本地 sops+age 加密凭据库。AI 只见结构，明文只随人工点击流动。"
+  }
+}
