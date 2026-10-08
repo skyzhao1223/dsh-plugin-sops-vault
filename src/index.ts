@@ -349,5 +349,15 @@ export function apply(ctx: Context, config?: VaultPluginConfig): void {
     }
   }
 
-  webServer.register({ kind: 'prefix', path: API_PATH, handler: handle })
+  const disposeRoute = webServer.register({ kind: 'prefix', path: API_PATH, handler: handle })
+
+  // Cordis disposal: unregister the prefix route so disable/remove/re-install
+  // cycles do not leak the route and trip the webserver's duplicate-prefix guard.
+  return () => {
+    try {
+      disposeRoute?.()
+    } catch {
+      /* route already gone */
+    }
+  }
 }

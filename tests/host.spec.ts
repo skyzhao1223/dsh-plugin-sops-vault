@@ -407,11 +407,13 @@ describe('DSH 0.2 shell seam (execute/result, no run)', () => {
       execute: async () => ({ result: Promise.resolve({ exitCode: 0, stdout: { text: '' }, stderr: { text: '' } }) }),
     }
     const webServer = { register: (route: CapturedRoute) => { routes.push(route); return () => {} } }
-    plugin.apply({ shell, webServer } as unknown as Context, { vaultDir: dir })
+    const dispose = plugin.apply({ shell, webServer } as unknown as Context, { vaultDir: dir })
+    expect(typeof dispose).toBe('function')
     const res = mockRes()
     await routes[0]!.handler(mockReq('GET', `${API_PATH}/dirty`), res)
     expect(res.statusCode).toBe(200)
     expect(res.json().ok).toBe(true)
     expect(executed.some((c) => c.includes('--porcelain'))).toBe(true)
+    ;(dispose as unknown as () => void)()
   })
 })
