@@ -23,6 +23,93 @@ export interface TotpResult {
   remain: number
 }
 
+/** One browser-profile storage area of the Authenticator extension. */
+export interface ImportSource {
+  /** Browser family (`chrome`, `edge`, …). */
+  browser: string
+  /** Profile directory name (`Default`, `Profile 1`, …). */
+  profile: string
+  /** Extension id the storage belongs to. */
+  extId: string
+  /** Which extension storage area holds the entries. */
+  area: 'sync' | 'local'
+  /** Absolute directory the source was read from. */
+  dir: string
+  /** Entry count in this source. */
+  entries: number
+}
+
+/**
+ * One scanned TOTP entry, as offered for import. The base32 seed never crosses
+ * the API — only its length does; the host re-reads the seed from disk by `id`
+ * when the import is applied.
+ */
+export interface ImportEntry {
+  /** Stable uuid of the source entry (the apply request keys on it). */
+  id: string
+  /** Index into `ImportScan.sources`. */
+  source: number
+  /** Issuer label, may be ''. */
+  issuer: string
+  /** Account label, may be ''. */
+  account: string
+  /** `totp` | `hotp` | `battle` | `steam` | `hex` | `hhex` | `unknown`. */
+  type: string
+  /** Code length in digits. */
+  digits: number
+  /** Refresh period in seconds. */
+  period: number
+  /** `sha1` | `sha256` | `sha512` | … */
+  algorithm: string
+  /** HOTP counter (0 for time-based entries). */
+  counter: number
+  /** Length of the base32 seed; the seed itself never crosses the API. */
+  secretLen: number
+  /** Whether the source stores this entry encrypted. */
+  encrypted: boolean
+  /** false => cannot be imported. */
+  usable: boolean
+  /** Why unusable, or why it will be skipped; '' when fine. */
+  reason: string
+  /** Suggested vault entry short name (issuer- or account-derived, no group prefix). */
+  suggest: string
+  /** Suggested url ('' when the issuer is not a hostname). */
+  url: string
+  /** A vault entry with this exact suggested name already exists. */
+  exists: boolean
+}
+
+/** Whole `import-scan` payload. */
+export interface ImportScan {
+  sources: ImportSource[]
+  entries: ImportEntry[]
+  /** Names of the vault entries that already exist. */
+  vaultEntries: string[]
+}
+
+/** One entry the user asked to import; the host resolves the seed from `id`. */
+export interface ImportItem {
+  id: string
+  name: string
+  username: string
+  url: string
+  note: string
+  /** Replace an existing vault entry of the same name. */
+  overwrite: boolean
+}
+
+/** Result of `import-apply`. */
+export interface ImportResult {
+  /** Vault names that were written. */
+  imported: string[]
+  /** Entries the host refused, with reasons. */
+  skipped: Array<{ id: string; name: string; reason: string }>
+  /** Entries whose write errored on the host; same shape as `skipped`. */
+  failed?: Array<{ id: string; name: string; reason: string }>
+  /** Item count the host received. */
+  total?: number
+}
+
 /**
  * Call one API route.
  * @param route - sub-route under `/vault-api` (e.g. `meta`).

@@ -1,10 +1,11 @@
 /**
  * Pure UI logic shared by the panel and covered by `tests/client-logic.spec.ts`.
- * No React, no DOM, no fetch — deterministic transforms over vault metadata.
+ * No React, no DOM, no fetch — deterministic transforms over vault metadata,
+ * plus the naming/summary half of the Authenticator import flow.
  *
  * @module dsh-plugin-sops-vault/client/logic
  */
-import type { FieldMeta, VaultMeta } from './api.ts'
+import type { FieldMeta, ImportEntry, VaultMeta } from './api.ts'
 
 /** Deterministic avatar hue from an entry name. */
 export function hueOf(s: string): number {
@@ -122,4 +123,68 @@ export function groupEntries(meta: VaultMeta, visible: readonly string[], fallba
     ;(groups[g] ??= []).push(n)
   }
   return orderGroups(Object.keys(groups)).map((g) => [g, groups[g]!] as [string, string[]])
+}
+
+/* ---------- Authenticator import ---------- */
+
+/** Strip surrounding whitespace and slashes off one name part. */
+function trimPart(s: string): string {
+  return String(s ?? '').trim().replace(/^\/+/, '').replace(/\/+$/, '').trim()
+}
+
+/**
+ * Target vault name of one import row: the group prefix and the suggested short
+ * name joined with `/`, each trimmed of surrounding whitespace and slashes.
+ * An empty prefix yields the bare short name; an empty short name yields `''`
+ * (never a dangling group).
+ */
+export function importTargetName(prefix: string, suggest: string): string {
+  const p = trimPart(prefix)
+  const n = trimPart(suggest)
+  if (n === '') return ''
+  return p === '' ? n : `${p}/${n}`
+}
+
+/**
+ * Note text stored on an imported entry, e.g.
+ * `Authenticator 导入 2026-10-08 · chrome/Default · issuer=KSO-Jumpserver · account=zhaotian1`.
+ * Empty parts are omitted. Never contains a secret: only the labels the scan
+ * already exposes (issuer / account / source / date).
+ */
+export function importDefaultNote(issuer: string, account: string, sourceLabel: string, date: string): string {
+  const d = trimPart(date)
+  const src = trimPart(sourceLabel)
+  const iss = trimPart(issuer)
+  const acc = trimPart(account)
+  const parts: string[] = []
+  if (src !== '') parts.push(src)
+  if (iss !== '') parts.push(`issuer=${iss}`)
+  if (acc !== '') parts.push(`account=${acc}`)
+  const head = d === '' ? 'Authenticator 导入' : `Authenticator 导入 ${d}`
+  return [head, ...parts].join(' · ')
+}
+
+/**
+ * One-line human summary of an applied import, for the toast.
+ * @param imported - vault names that were written.
+ * @param skipped - entries the host refused, with reasons.
+ * @param t - translator; structural (string keys) so this module stays
+ *   dictionary-agnostic. Keys used: `importSumOk`, `importSumSkip`, `importSumNone`.
+ */
+export function importSummaryText(
+  imported: string[],
+  skipped: { name: string; reason: string }[],
+  t: (k: string, p?: Record<string, string | number>) => string,
+): string {
+  const done = imported.length
+  const miss = skipped.length
+  if (done === 0 && miss === 0) return t('importSumNone')
+  const parts = [done > 0 ? t('importSumOk', { n: done }) : t('importSumNone')]
+  if (miss > 0) parts.push(t('importSumSkip', { n: miss, first: skipped[0]!.name }))
+  return parts.join(' · ')
+}
+
+/** Import candidates offered as checked by default: usable and not already in the vault. */
+export function importSelectable(entries: ImportEntry[]): ImportEntry[] {
+  return entries.filter((e) => e.usable && !e.exists)
 }

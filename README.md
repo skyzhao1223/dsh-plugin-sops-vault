@@ -12,6 +12,7 @@ first-class sidebar panel of the DSH Web GUI — with a hard security boundary b
 │    · entry rows grouped by prefix, search, git-dirty badge            │
 │    · detail drawer: per-field 👁 reveal / copy / edit / delete         │
 │    · live TOTP with countdown ring · entry creation · security audit   │
+│    · one-click import of browser Authenticator seeds                   │
 │    · access log (values never logged) · zh/en UI                       │
 └──────────────┬─────────────────────────────────────────────────────────┘
                │ same-origin fetch (Origin-checked)
@@ -68,7 +69,7 @@ No other CLI or daemon is required — the plugin drives `sops` and `git` direct
 git clone https://github.com/skyzhao1223/dsh-plugin-sops-vault && cd dsh-plugin-sops-vault
 pnpm install
 pnpm build          # tsc (node half + types) + tsdown (browser bundle)
-pnpm test           # 47 unit tests
+pnpm test           # 87 unit tests
 pnpm verify         # load-path check against the built artifact
 
 dsh web --patch "$PWD/cordis.yml"
@@ -107,6 +108,27 @@ One prefix route on the DSH web server; every response is `{ok, data|error}` JSO
 | `/vault-api/audit-log` | GET | tail of the access log |
 | `/vault-api/set` / `rm` / `create` / `save` | POST | field write / delete / new entry / git commit |
 | `/vault-api/dirty` | GET | git dirty state |
+| `/vault-api/import-scan` | GET | TOTP entries found in the browser's Authenticator extension (`?lang=zh|en` localizes reasons) |
+| `/vault-api/import-apply` | POST | write the selected entries into the vault (`{items:[{id,name,username,url,note,overwrite}]}`) |
+
+### Importing from the Chrome Authenticator extension
+
+The 导入动态码 / *Import codes* toolbar button reads the
+[Authenticator](https://github.com/Authenticator-Extension/Authenticator) extension straight off disk:
+a built-in read-only LevelDB parser (`src/host/leveldb.ts` — WAL log records, SSTable blocks and a
+from-scratch Snappy decompressor, no native dependency) recovers the extension's `OTPStorage` entries
+from `<profile>/{Sync,Local} Extension Settings/<ext-id>/`, whichever area the extension's own
+`UserSettings.storageLocation` points at. Chrome, Chromium, Edge, Brave, Vivaldi, Arc and Opera are
+auto-discovered on macOS/Linux/Windows; `config.browserDataDir` adds a non-standard user-data root.
+
+The scan returns metadata only (issuer, account, type, digits, period, seed **length**). The seed
+itself never crosses the API: on apply the host re-reads it from disk and looks it up by `id`, then
+writes it with `sops set`. Names, urls and notes are editable per row, with an optional group prefix.
+
+Not supported, reported as such per row: entries the extension encrypted with a passphrase (they need
+the extension's argon2 key derivation), and counter-based / non-RFC6238 flavours (HOTP, Steam, Battle.net).
+Entries with non-default parameters import fine but carry a warning — the panel's ring always computes
+SHA-1 / 6 digits / 30 s.
 
 ## Security model
 
@@ -117,6 +139,7 @@ One prefix route on the DSH web server; every response is `{ok, data|error}` JSO
 | **Other web origins** | Rejected: any request carrying a cross-origin or `null` `Origin` gets 403. Origin-less callers (your own curl) are allowed — same trust domain as the vault files. |
 | **Disk** | The vault stays sops-encrypted (allowlist mode). The plugin writes no plaintext anywhere. |
 | **Scraping attempts** | `reveal`/`totp` share a 30/min sliding-window rate limit (in-memory); excess gets 429 with a *treat the GUI as compromised* hint. Blunts bulk-scraping by an XSS'd page. |
+| **Browser import** | The extension store is opened read-only; seeds stay host-side (the API carries `secretLen`, never a seed) and land directly in the sops-encrypted vault. Scan+apply share their own 12/min ceiling. |
 
 **Access log**: every reveal/totp/set/rm/create/save appends one line — ISO time, action, target, source
 IP — to `<vaultDir>/.git/dsh-vault-audit.log` (inside `.git/` so git status stays clean; falls back to
@@ -135,10 +158,13 @@ panel's API — same blast radius as any in-page secret manager.
 src/index.ts            host plugin: config, /vault-api route, sops/git driver, access log
 src/host/vault.ts       pure vault logic (parsing, allowlist audit, TOTP, quoting) — unit-tested
 src/host/types.ts       structural types for webServer/shell (no internal deps)
+src/host/leveldb.ts     read-only LevelDB parser (WAL + SSTable + Snappy) — unit-tested
+src/host/authenticator.ts  browser discovery + Authenticator entry parsing — unit-tested
 src/client/index.ts     client plugin: slots registration + styles
 src/client/VaultPanel.tsx  the panel UI (React from the platform module table)
 src/client/logic.ts     pure UI transforms — unit-tested
 src/client/i18n.ts      zh/en dictionaries (auto-detect via navigator.language)
+tests/fixtures/leveldb.ts  synthetic LevelDB encoders (no real profile in the suite)
 scripts/verify.ts       built-artifact load-path verification
 cordis.yml              opt-in overlay for `dsh web --patch`
 ```
@@ -153,6 +179,7 @@ cordis resolved from the platform module table); see `tsdown.config.ts`.
 - [x] reveal rate-limiting (30/min sliding window, v0.2.0)
 - [x] entry rename + one-click sort (v0.3.0)
 - [ ] batch edit
+- [x] browser Authenticator import (LevelDB reader, scan + apply, v0.4.0)
 - [ ] CSV import bridge, KeePassXC `.kdbx` mirror export for mobile
 - [ ] optional model-facing read-only tools (`vault_list`, structure-only by design)
 

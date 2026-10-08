@@ -1,8 +1,9 @@
 /**
  * The Vault panel: compact entry rows grouped by prefix, a detail drawer with
  * per-field reveal/copy/edit/delete, live TOTP with a countdown ring, entry
- * creation, security audit + access log, and git dirty-state commit — all
- * driven through the same-origin `/vault-api` route of the node half.
+ * creation, TOTP import from the browser's Authenticator extension, security
+ * audit + access log, and git dirty-state commit — all driven through the
+ * same-origin `/vault-api` route of the node half.
  *
  * Plaintext secret values are fetched per field on explicit click only and
  * kept in component state (memory), never persisted by this bundle.
@@ -12,14 +13,27 @@
 import { createElement, useCallback, useEffect, useRef, useState } from 'react'
 import type { ChangeEvent, KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react'
 import { api } from './api.ts'
-import type { FieldMeta, TotpResult, VaultMeta } from './api.ts'
+import type { FieldMeta, ImportItem, ImportResult, ImportScan, TotpResult, VaultMeta } from './api.ts'
 import {
   chipValues, encCount, entrySubline, fieldOrder, groupEntries,
-  hueOf, isLinkValue, matchEntry, noteOf, shortName,
+  hueOf, importDefaultNote, importSelectable, importSummaryText, importTargetName,
+  isLinkValue, matchEntry, noteOf, shortName,
 } from './logic.ts'
 import { detectLang, makeT } from './i18n.ts'
+import type { CopyKey } from './i18n.ts'
 
-const t = makeT(detectLang())
+const lang = detectLang()
+const t = makeT(lang)
+
+/** Query suffix for the import routes: the host localizes its `reason` strings. */
+const LANG_Q = `?lang=${lang}`
+
+/**
+ * Same translator widened to structural string keys, for the pure logic
+ * helpers that must stay dictionary-agnostic. Unknown keys fall back to the
+ * key text (`makeT` behaviour), never throw.
+ */
+const tStr = (k: string, p?: Record<string, string | number>): string => t(k as CopyKey, p)
 
 const MASK = '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022'
 
@@ -42,6 +56,7 @@ const ICONS: Record<string, IconSpec> = {
   key: [['circle', { cx: 7.5, cy: 15.5, r: 4.5 }], ['path', { d: 'M21 2l-9.6 9.6' }], ['path', { d: 'M15.5 7.5l3 3' }]],
   check: [['path', { d: 'M20 6L9 17l-5-5' }]],
   sort: [['path', { d: 'M3 6h11' }], ['path', { d: 'M3 12h7' }], ['path', { d: 'M3 18h4' }], ['path', { d: 'M17 7v10' }], ['path', { d: 'M14 14l3 3 3-3' }]],
+  import: [['path', { d: 'M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4' }], ['path', { d: 'M7 10l5 5 5-5' }], ['line', { x1: 12, y1: 15, x2: 12, y2: 3 }]],
 }
 
 function Glyph({ n, s = 14 }: { n: string; s?: number }) {
@@ -382,6 +397,224 @@ function AuditModal({ onClose }: { onClose: () => void }) {
   )
 }
 
+/* ---------- import modal ---------- */
+
+/** One editable import row: selection plus the two user-editable fields. */
+interface ImportRow {
+  checked: boolean
+  name: string
+  url: string
+  /** True once the user edited the name by hand — prefix changes then skip it. */
+  touched: boolean
+}
+
+/** Local (not UTC) `YYYY-MM-DD` for the imported note; '' when unavailable. */
+function todayLabel(): string {
+  try {
+    const d = new Date()
+    const p = (n: number): string => String(n).padStart(2, '0')
+    return `${String(d.getFullYear())}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * Import TOTP entries the Chrome Authenticator extension stores on this host.
+ * The scan lists candidates only — no seed ever crosses the API; the host
+ * re-reads each one from disk by `id` when the selection is applied.
+ */
+function ImportModal({ onClose, onSay, onImported }: { onClose: () => void; onSay: (m: string) => void; onImported: () => void }) {
+  const [scan, setScan] = useState<ImportScan | null>(null)
+  const [err, setErr] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [srcIdx, setSrcIdx] = useState(0)
+  const [prefix, setPrefix] = useState('')
+  const [rows, setRows] = useState<Record<string, ImportRow>>({})
+
+  const load = useCallback(() => {
+    setScan(null)
+    setErr('')
+    api<ImportScan>(`import-scan${LANG_Q}`).then(
+      (d) => {
+        const s: ImportScan = d !== null && typeof d === 'object' ? d : { sources: [], entries: [], vaultEntries: [] }
+        const init: Record<string, ImportRow> = {}
+        for (const e of s.entries) init[e.id] = { checked: e.usable && !e.exists, name: importTargetName('', e.suggest), url: e.url, touched: false }
+        const first = s.sources.findIndex((_, i) => s.entries.some((e) => e.source === i))
+        setScan(s)
+        setRows(init)
+        setSrcIdx(first >= 0 ? first : 0)
+      },
+      (e: unknown) => setErr(String((e as Error | undefined)?.message ?? e)),
+    )
+  }, [])
+
+  useEffect(() => { load() }, [load])
+
+  const sources = scan?.sources ?? []
+  const all = scan?.entries ?? []
+  const shown = all.filter((e) => e.source === srcIdx)
+  const src = sources[srcIdx]
+  const srcLabel = src === undefined ? '' : `${src.browser}/${src.profile}`
+  const selected = shown.filter((e) => rows[e.id]?.checked === true).length
+
+  const patch = (id: string, p: Partial<ImportRow>) => {
+    setRows((prev) => (prev[id] === undefined ? prev : { ...prev, [id]: { ...prev[id]!, ...p } }))
+  }
+
+  /** A prefix edit rewrites every row name the user has not touched by hand. */
+  const onPrefix = (v: string) => {
+    setPrefix(v)
+    setRows((prev) => {
+      const next = { ...prev }
+      for (const e of all) {
+        const r = next[e.id]
+        if (r !== undefined && !r.touched) next[e.id] = { ...r, name: importTargetName(v, e.suggest) }
+      }
+      return next
+    })
+  }
+
+  const selectUsable = () => {
+    const pick = importSelectable(shown)
+    if (pick.length === 0) return
+    setRows((prev) => {
+      const next = { ...prev }
+      for (const e of pick) {
+        const r = next[e.id]
+        if (r !== undefined) next[e.id] = { ...r, checked: true }
+      }
+      return next
+    })
+  }
+
+  const submit = () => {
+    if (busy || scan === null) return
+    const items: ImportItem[] = []
+    for (const e of shown) {
+      const r = rows[e.id]
+      if (r === undefined || !r.checked || !e.usable) continue
+      const nm = r.name.trim()
+      if (nm === '') continue
+      items.push({
+        id: e.id,
+        name: nm,
+        username: e.account,
+        url: r.url.trim(),
+        note: importDefaultNote(e.issuer, e.account, srcLabel, todayLabel()),
+        overwrite: e.exists,
+      })
+    }
+    if (items.length === 0) { onSay(t('importNeedName')); return }
+    setBusy(true)
+    api<ImportResult>(`import-apply${LANG_Q}`, { items }).then(
+      (r) => {
+        setBusy(false)
+        const done = Array.isArray(r?.imported) ? r.imported : []
+        // The host also reports write errors as `failed`; surface them as skips.
+        const skipped = Array.isArray(r?.skipped) ? r.skipped : []
+        const failed = Array.isArray(r?.failed) ? r.failed : []
+        onSay(importSummaryText(done, [...skipped, ...failed], tStr))
+        onImported()
+        onClose()
+      },
+      (e: unknown) => { setBusy(false); onSay(`⚠ ${String((e as Error | undefined)?.message ?? e).slice(0, 80)}`) },
+    )
+  }
+
+  let body: ReactNode
+  if (err !== '') {
+    body = (
+      <div className="vp-imp-state">
+        <div className="vp-err" style={{ margin: '0 0 11px' }}>{t('importLoadFail')}{err}</div>
+        <button className="vp-btn" onClick={load}><Glyph n="refresh" s={12} />{t('retry')}</button>
+      </div>
+    )
+  } else if (scan === null) {
+    body = <div className="vp-imp-state vp-hint">{t('importLoading')}</div>
+  } else if (sources.length === 0) {
+    body = <div className="vp-imp-state vp-hint">{t('importNoSource')}</div>
+  } else {
+    body = (
+      <>
+        <div className="vp-imp-bar">
+          {sources.length > 1 ? (
+            <label className="vp-imp-src">{t('importSourceLabel')}
+              <select value={String(srcIdx)} onChange={(e: ChangeEvent<HTMLSelectElement>) => setSrcIdx(Number(e.target.value))}>
+                {sources.map((s, i) => (
+                  <option key={`${s.browser}/${s.profile}#${String(i)}`} value={String(i)}>
+                    {`${s.browser}/${s.profile} · ${s.area} · ${String(s.entries)}`}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : <span className="vp-imp-src">{`${t('importSourceLabel')}: ${srcLabel}`}</span>}
+          <label className="vp-imp-prefix">{t('importPrefixLabel')}
+            <input value={prefix} placeholder={t('importPrefixPh')} aria-label={t('importPrefixLabel')}
+              onChange={(e: ChangeEvent<HTMLInputElement>) => onPrefix(e.target.value)} />
+          </label>
+          {shown.length > 0 ? <button className="vp-btn" onClick={selectUsable}>{t('importSelAll')}</button> : null}
+        </div>
+        {shown.length === 0 ? (
+          <div className="vp-hint" style={{ padding: '14px 2px' }}>{t('importNoneForSource')}</div>
+        ) : (
+          <div className="vp-imp-list">
+            <div className="vp-imp-row vp-imp-head" aria-hidden="true">
+              <span /><span>{t('importColIssuer')}</span><span>{t('importColAccount')}</span>
+              <span>{t('importColName')}</span><span>{t('importColUrl')}</span>
+            </div>
+            {shown.map((e) => {
+              const r = rows[e.id] ?? { checked: false, name: '', url: '', touched: false }
+              const off = !e.usable
+              const title = e.issuer !== '' ? e.issuer : (e.account !== '' ? e.account : t('importUnnamed'))
+              const odd = e.type !== 'totp' || e.digits !== 6 || e.period !== 30
+              return (
+                <div key={e.id} className={`vp-imp-row${off ? ' vp-imp-off' : ''}`}>
+                  <input type="checkbox" checked={r.checked} disabled={off} title={e.reason !== '' ? e.reason : title}
+                    aria-label={title}
+                    onChange={(ev: ChangeEvent<HTMLInputElement>) => patch(e.id, { checked: ev.target.checked })} />
+                  <span className="vp-imp-cell">
+                    <span className="vp-imp-iss" title={title}>{title}</span>
+                    {odd ? <span className="vp-imp-badge">{`${e.type}/${String(e.digits)}/${String(e.period)}`}</span> : null}
+                    {e.exists ? <span className="vp-imp-badge vp-imp-warn">{t('importBadgeExists')}</span> : null}
+                  </span>
+                  <span className="vp-imp-acc" title={e.account}>{e.account}</span>
+                  <input className="vp-imp-in" value={r.name} disabled={off} aria-label={t('importColName')}
+                    onChange={(ev: ChangeEvent<HTMLInputElement>) => patch(e.id, { name: ev.target.value, touched: true })} />
+                  <input className="vp-imp-in" value={r.url} disabled={off} aria-label={t('importColUrl')} placeholder="https://…"
+                    onChange={(ev: ChangeEvent<HTMLInputElement>) => patch(e.id, { url: ev.target.value })} />
+                  {e.reason !== '' ? <div className={`vp-imp-reason${off ? ' vp-imp-bad' : ''}`}>{e.reason}</div> : null}
+                </div>
+              )
+            })}
+          </div>
+        )}
+        <div className="vp-hint" style={{ marginTop: 11 }}>{t('importHint')}</div>
+      </>
+    )
+  }
+
+  return (
+    <div className="vp-modal">
+      <div className="vp-backdrop" onClick={onClose} />
+      <div className="vp-mbox vp-imp" role="dialog" aria-modal="true" aria-label={t('importTitle')}>
+        <div className="vp-mh">
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}><Glyph n="import" />{t('importTitle')}</span>
+          <button className="vp-x" aria-label={t('closeTitle')} onClick={onClose}><Glyph n="x" s={13} /></button>
+        </div>
+        <div className="vp-mb">{body}</div>
+        <div className="vp-mf">
+          <span className="vp-imp-count">{t('importSelected', { n: selected })}</span>
+          <button className="vp-btn" onClick={onClose}>{t('cancel')}</button>
+          <button className="vp-btn vp-btn-pri" disabled={selected === 0 || busy} onClick={submit}>
+            {busy ? t('importApplying') : t('importBtnApply')}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 /* ---------- panel ---------- */
 
 export function VaultPanel() {
@@ -394,6 +627,7 @@ export function VaultPanel() {
   const [toast, setToast] = useState('')
   const [auditOpen, setAuditOpen] = useState(false)
   const [newOpen, setNewOpen] = useState(false)
+  const [importOpen, setImportOpen] = useState(false)
   const [dirty, setDirty] = useState(false)
   const [stamp, setStamp] = useState('')
   const searchRef = useRef<HTMLInputElement | null>(null)
@@ -494,6 +728,7 @@ export function VaultPanel() {
 
   const onKey = (e: ReactKeyboardEvent<HTMLDivElement>) => {
     if (e.key === 'Escape') {
+      if (importOpen) { setImportOpen(false); return }
       if (auditOpen) { setAuditOpen(false); return }
       if (newOpen) { setNewOpen(false); return }
       if (sel !== '') { setSel(''); return }
@@ -590,6 +825,7 @@ export function VaultPanel() {
         {dirty ? <button className="vp-btn vp-btn-pri" onClick={commit}><Glyph n="check" s={12} />{t('commit')}</button> : null}
         <button className="vp-btn" title={t('reload')} aria-label={t('reload')} onClick={load}><Glyph n="refresh" s={12} /></button>
         <button className="vp-btn" title={t('sortBtn')} onClick={doSort}><Glyph n="sort" s={12} />{t('sortBtn')}</button>
+        <button className="vp-btn" title={t('importBtn')} onClick={() => setImportOpen(true)}><Glyph n="import" s={12} />{t('importBtn')}</button>
         <button className="vp-btn" onClick={() => setAuditOpen(true)}><Glyph n="shield" s={12} />{t('audit')}</button>
         <button className="vp-btn vp-btn-pri" onClick={() => setNewOpen(true)}><Glyph n="plus" s={12} />{t('create')}</button>
       </div>
@@ -606,6 +842,7 @@ export function VaultPanel() {
         <NewModal onClose={() => setNewOpen(false)} onSay={say}
           onCreated={(nm) => { setNewOpen(false); say(t('created', { name: nm })); load(); setSel(nm) }} />
       ) : null}
+      {importOpen ? <ImportModal onClose={() => setImportOpen(false)} onSay={say} onImported={load} /> : null}
       {toast !== '' ? <div className="vp-toast" role="status">{toast}</div> : null}
     </div>
   )

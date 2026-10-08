@@ -10,6 +10,7 @@
 │    · 按前缀分组的条目行、搜索、git 未提交橙点                            │
 │    · 详情抽屉：单字段 👁 显示 / 复制 / 编辑 / 删除                        │
 │    · TOTP 环形倒计时 · 新建条目 · 安全审计 · 访问日志 · 中英双语          │
+│    · 一键导入浏览器 Authenticator 扩展里的动态码种子                      │
 └──────────────┬─────────────────────────────────────────────────────────┘
                │ 同源 fetch（Origin 校验）
 ┌──────────────▼───────────────┐        ┌──────────────────────────────┐
@@ -64,7 +65,7 @@
 git clone https://github.com/skyzhao1223/dsh-plugin-sops-vault && cd dsh-plugin-sops-vault
 pnpm install
 pnpm build          # tsc（node 半 + 类型）+ tsdown（浏览器 bundle）
-pnpm test           # 47 个单元测试
+pnpm test           # 87 个单元测试
 pnpm verify         # 对构建产物做加载路径验证
 
 dsh web --patch "$PWD/cordis.yml"
@@ -102,6 +103,24 @@ DSH web server 上的一个前缀路由；所有响应都是 `{ok, data|error}` 
 | `/vault-api/audit-log` | GET | 访问日志尾部 |
 | `/vault-api/set` / `rm` / `create` / `save` | POST | 字段写入 / 删除 / 新建条目 / git 提交 |
 | `/vault-api/dirty` | GET | git 脏状态 |
+| `/vault-api/import-scan` | GET | 扫描浏览器 Authenticator 扩展里的动态码条目（`?lang=zh|en` 决定原因文案语言） |
+| `/vault-api/import-apply` | POST | 把勾选的条目写进库（`{items:[{id,name,username,url,note,overwrite}]}`） |
+
+### 从 Chrome 的 Authenticator 扩展导入
+
+顶栏「导入动态码」按钮直接读磁盘上的
+[Authenticator](https://github.com/Authenticator-Extension/Authenticator) 扩展数据：内置只读 LevelDB
+解析器（`src/host/leveldb.ts`——WAL 日志记录、SSTable 数据块、纯手写 Snappy 解压，无原生依赖），从
+`<profile>/{Sync,Local} Extension Settings/<ext-id>/` 里恢复 `OTPStorage` 条目；读哪个区由扩展自己的
+`UserSettings.storageLocation` 决定。macOS/Linux/Windows 上自动发现 Chrome、Chromium、Edge、Brave、
+Vivaldi、Arc、Opera；非标准安装可用 `config.browserDataDir` 追加一个 user-data 根目录。
+
+扫描只返回元数据（发行方、账号、类型、位数、周期、种子**长度**）。种子本身不过 API：apply 时 Host 重新
+读盘并按 `id` 取回，再用 `sops set` 写进加密库。目标名称/URL/备注可逐行修改，还能统一加分组前缀。
+
+不支持的会在对应行明确报出来：被扩展口令加密的条目（需要扩展那套 argon2 派生），以及计数器型/非
+RFC6238 类型（HOTP、Steam、Battle.net）。参数非默认值的条目可以导入，但会带一条警告——面板的倒计时环
+固定按 SHA-1 / 6 位 / 30 秒计算。
 
 ## 安全模型
 
@@ -112,6 +131,7 @@ DSH web server 上的一个前缀路由；所有响应都是 `{ok, data|error}` 
 | **其他网页源** | 拒绝：任何带跨源或 `null` Origin 头的请求一律 403。无 Origin 的非浏览器本地调用（你自己的 curl）放行——它们和库文件本来就在同一信任域。 |
 | **磁盘** | 库保持 sops 白名单加密。本插件不在任何地方写明文。 |
 | **批量刮取** | `reveal`/`totp` 共享 30 次/分钟滑动窗口限速（内存态）；超出返回 429 并提示“视 GUI 已失陷”。XSS 页面想扫全库会立刻撞墙。 |
+| **浏览器导入** | 扩展存储只读打开；种子全程留在 Host 侧（API 只传 `secretLen`，绝不传种子），直接落进 sops 加密库。scan/apply 另有 12 次/分钟上限。 |
 
 **访问日志**：每次 reveal/totp/set/rm/create/save 追加一行——ISO 时间、动作、目标、来源 IP——
 写入 `<vaultDir>/.git/dsh-vault-audit.log`（放 `.git/` 里所以不影响 git 状态；非 git 库回退到
@@ -129,10 +149,13 @@ DSH GUI 内部若被 XSS，攻击者能以页面身份调 API——爆炸半径�
 src/index.ts            Host 插件：config、/vault-api 路由、sops/git 驱动、访问日志
 src/host/vault.ts       纯 vault 逻辑（解析、白名单审计、TOTP、引号转义）——有单测
 src/host/types.ts       webServer/shell 的结构化类型（不依赖内部包）
+src/host/leveldb.ts     只读 LevelDB 解析器（WAL + SSTable + Snappy）——有单测
+src/host/authenticator.ts  浏览器发现 + Authenticator 条目解析——有单测
 src/client/index.ts     Client 插件：slots 注册 + 样式
 src/client/VaultPanel.tsx  面板 UI（React 由平台模块表提供）
 src/client/logic.ts     纯 UI 变换 —— 有单测
 src/client/i18n.ts      中英字典（navigator.language 自动选择）
+tests/fixtures/leveldb.ts  合成 LevelDB 编码器（测试不碰真实浏览器配置）
 scripts/verify.ts       构建产物加载路径验证
 cordis.yml              `dsh web --patch` 用的 opt-in overlay
 ```
@@ -147,6 +170,7 @@ Client bundle 遵循 DSH closure-factory 约定（`window.__ModuleLoader__.load`
 - [x] reveal 限速（30 次/分钟滑动窗口，v0.2.0）
 - [x] 条目重命名 + 一键排序（v0.3.0）
 - [ ] 批量编辑
+- [x] 浏览器 Authenticator 导入（LevelDB 读取器 + scan/apply，v0.4.0）
 - [ ] CSV 导入桥、KeePassXC `.kdbx` 镜像导出（手机端）
 - [ ] 可选的模型侧只读工具（`vault_list`，设计上仅结构）
 

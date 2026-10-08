@@ -113,6 +113,41 @@ const handler = route!.handler
 check('sops invoked with quoted binary and extract path',
   commands.some((c) => c.startsWith(`'sops' 'decrypt' '--extract' '["systems"]["工作/VPN"]["password"]'`)))
 
+/**
+ * Both DSH shell generations must work. 0.2.0 ships `execution.result` as a
+ * METHOD; awaiting it as a property silently yields no exit code and every
+ * shell-backed route fails with an empty "exit ?" — so the method shape gets
+ * its own mount here, plus the property shape some pre-releases used.
+ */
+for (const [label, execution] of [
+  ['0.2.x result() method', { result: async () => ({ exitCode: 0, stdout: { text: 'V\n' }, stderr: { text: '' } }) }],
+  ['0.2.x result promise', { result: Promise.resolve({ exitCode: 0, stdout: { text: 'V\n' }, stderr: { text: '' } }) }],
+] as const) {
+  let r2: typeof route = null
+  const shell2 = {
+    resolve: (r: { command: string }) => r,
+    execute: async () => execution,
+  }
+  plugin.apply({ shell: shell2, webServer: { register: (r: typeof route) => { r2 = r; return () => {} } } } as never, { vaultDir: dir })
+  const res = mockRes()
+  await r2!.handler(mockReq('POST', '/vault-api/reveal', { name: '工作/VPN', field: 'password' }), res)
+  const json = JSON.parse(res.body) as ApiResponse
+  check(`shell seam ${label}`, json.ok === true && json.data?.value === 'V', res.body.slice(0, 120))
+}
+{
+  // a killed run (null exit code) must say why, not just "exit ?"
+  let r3: typeof route = null
+  const shell3 = {
+    resolve: (r: { command: string }) => r,
+    execute: async () => ({ result: async () => ({ exitCode: null, signal: 'SIGKILL', timedOut: true, stdout: { text: '' }, stderr: { text: '' } }) }),
+  }
+  plugin.apply({ shell: shell3, webServer: { register: (r: typeof route) => { r3 = r; return () => {} } } } as never, { vaultDir: dir })
+  const res = mockRes()
+  await r3!.handler(mockReq('POST', '/vault-api/reveal', { name: '工作/VPN', field: 'password' }), res)
+  const json = JSON.parse(res.body) as ApiResponse
+  check('timeout/kill is diagnosed in the error', json.ok === false && /timed out/.test(json.error ?? '') && /SIGKILL/.test(json.error ?? ''), json.error)
+}
+
 rmSync(dir, { recursive: true, force: true })
 
 if (failures > 0) {

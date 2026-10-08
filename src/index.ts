@@ -43,6 +43,13 @@ import {
   validateEntryName,
   validateFieldName,
 } from './host/vault.ts'
+import {
+  browserRoots,
+  collectSeeds,
+  judgeEntry,
+  scanAuthenticator,
+  type BrowserRoot,
+} from './host/authenticator.ts'
 import type { ShellLike, ShellRunResultLike, VaultPluginConfig, WebServerLike } from './host/types.ts'
 
 /** Cordis function-plugin name. */
@@ -51,12 +58,17 @@ export const name = 'dsh-plugin-sops-vault'
 /** Hard dependencies: the web carrier and the bash execution service. */
 export const inject = ['webServer', 'shell']
 
-/** Row config: where the vault lives and which binaries to use. */
+/**
+ * Row config: where the vault lives and which binaries to use.
+ * `browserDataDir` is an optional extra Chromium user-data root for the
+ * Authenticator import (platform auto-discovery runs regardless).
+ */
 export const Config = z.object({
   vaultDir: z.string(),
   sopsBin: z.string(),
   gitBin: z.string(),
   timeoutMs: z.number().step(1).min(1000).max(120000),
+  browserDataDir: z.string(),
 })
 
 function resolveDir(configured: string | undefined): string {
@@ -90,6 +102,19 @@ async function readBody(req: IncomingMessage, limit = 64 * 1024): Promise<Record
 }
 
 /**
+ * Language for host-generated reason strings, taken from `?lang=` on the
+ * request URL. Defaults to Chinese, matching the panel's zh-first dictionary.
+ */
+function queryLang(req: IncomingMessage): 'zh' | 'en' {
+  try {
+    const url = new URL(req.url ?? '', 'http://localhost')
+    return url.searchParams.get('lang') === 'en' ? 'en' : 'zh'
+  } catch {
+    return 'zh'
+  }
+}
+
+/**
  * Mount the `/vault-api` route. Disposal of this plugin fiber unregisters it.
  * @param ctx - root context providing `webServer` and `shell`.
  * @param config - row config, validated against {@link Config} and passed by
@@ -102,6 +127,10 @@ export function apply(ctx: Context, config?: VaultPluginConfig): () => void {
   const sopsBin = cfg.sopsBin ?? 'sops'
   const gitBin = cfg.gitBin ?? 'git'
   const timeoutMs = cfg.timeoutMs ?? 15_000
+  const browserDataDir = cfg.browserDataDir === undefined || cfg.browserDataDir === '' ? '' : resolveDir(cfg.browserDataDir)
+  /** Browser user-data roots for the Authenticator import: auto-discovery + optional override. */
+  const importRoots = (): readonly BrowserRoot[] =>
+    browserDataDir === '' ? browserRoots() : [...browserRoots(), { label: 'custom', root: browserDataDir }]
   const secretsFile = join(vaultDir, 'secrets.yaml')
   const sopsConfigFile = join(vaultDir, '.sops.yaml')
   const logFile = existsSync(join(vaultDir, '.git'))
@@ -116,7 +145,14 @@ export function apply(ctx: Context, config?: VaultPluginConfig): () => void {
    */
   async function runSpec(spec: unknown): Promise<ShellRunResultLike> {
     if (typeof shell.run === 'function') return await shell.run(spec)
-    if (typeof shell.execute === 'function') return await (await shell.execute(spec)).result
+    if (typeof shell.execute === 'function') {
+      const execution = await shell.execute(spec)
+      // DSH 0.2.0 ships `result` as a METHOD (`await (await execute(spec)).result()`);
+      // awaiting the function object instead yields no exit code and every route
+      // would fail with an empty "exit ?" error. Accept both shapes.
+      const result = execution?.result
+      return typeof result === 'function' ? await result.call(execution) : await result
+    }
     throw new Error('host shell service exposes neither run() nor execute()')
   }
 
@@ -126,7 +162,16 @@ export function apply(ctx: Context, config?: VaultPluginConfig): () => void {
     const out = typeof r?.stdout?.text === 'string' ? r.stdout.text : ''
     const err = typeof r?.stderr?.text === 'string' ? r.stderr.text : ''
     if (r?.exitCode !== 0) {
-      throw new Error(`command failed (exit ${String(r?.exitCode ?? '?')}): ${(err || out).slice(0, 300)}`)
+      // A null exit code means the process never reported one (deadline, signal,
+      // or a host seam mismatch) — say which, an empty message is undiagnosable.
+      const cause = [
+        err || out,
+        r === undefined || r === null ? 'no result from host shell service' : '',
+        r?.timedOut === true ? `timed out after ${String(timeoutMs)}ms` : '',
+        r?.aborted === true ? 'aborted' : '',
+        typeof r?.signal === 'string' && r.signal !== '' ? `signal ${r.signal}` : '',
+      ].filter((s) => s !== '').join('; ')
+      throw new Error(`command failed (exit ${String(r?.exitCode ?? '?')}): ${cause.slice(0, 300)}`)
     }
     return out
   }
@@ -158,6 +203,21 @@ export function apply(ctx: Context, config?: VaultPluginConfig): () => void {
     while (revealTimes.length > 0 && now - (revealTimes[0] ?? 0) > REVEAL_WINDOW_MS) revealTimes.shift()
     if (revealTimes.length >= REVEAL_LIMIT) return false
     revealTimes.push(now)
+    return true
+  }
+
+  /**
+   * Separate, tighter ceiling for the browser-import routes: a scan reads the
+   * user's 2FA metadata, an apply writes many fields at once. A human does this
+   * a handful of times a day; a scripted burst is not a human.
+   */
+  const IMPORT_LIMIT = 12
+  const importTimes: number[] = []
+  function allowImport(): boolean {
+    const now = Date.now()
+    while (importTimes.length > 0 && now - (importTimes[0] ?? 0) > REVEAL_WINDOW_MS) importTimes.shift()
+    if (importTimes.length >= IMPORT_LIMIT) return false
+    importTimes.push(now)
     return true
   }
 
@@ -240,6 +300,18 @@ export function apply(ctx: Context, config?: VaultPluginConfig): () => void {
         if (route === 'dirty') {
           const out = await git(['-C', vaultDir, 'status', '--porcelain'])
           send(res, 200, { ok: true, data: { dirty: out.trim() !== '' } })
+          return
+        }
+        if (route === 'import-scan') {
+          if (!allowImport()) {
+            send(res, 429, { ok: false, error: 'import scan rate limit exceeded (12/min)' })
+            return
+          }
+          const meta = parseRawVault(readSecretsRaw())
+          const vaultEntries = Object.keys(meta)
+          const scan = scanAuthenticator({ roots: importRoots(), vaultEntries, lang: queryLang(req) })
+          log('import-scan', `${String(scan.sources.length)} source(s), ${String(scan.entries.length)} entries`, req)
+          send(res, 200, { ok: true, data: { ...scan, vaultEntries } })
           return
         }
       }
@@ -339,6 +411,76 @@ export function apply(ctx: Context, config?: VaultPluginConfig): () => void {
           await roundtrip('.systems = ((.systems // {}) | to_entries | sort_by(.key) | from_entries)', [])
           log('sort', '*', req)
           send(res, 200, { ok: true, data: { sorted: true } })
+          return
+        }
+
+        if (route === 'import-apply') {
+          if (!allowImport()) {
+            send(res, 429, { ok: false, error: 'import rate limit exceeded (12/min); if this was not you, treat the GUI as compromised' })
+            return
+          }
+          const lang = queryLang(req)
+          const rawItems: unknown = body.items
+          if (!Array.isArray(rawItems) || rawItems.length === 0) throw new Error('import-apply: items[] is required')
+          if (rawItems.length > 500) throw new Error('import-apply: too many items (max 500)')
+          const meta = parseRawVault(readSecretsRaw())
+          const seeds = collectSeeds(importRoots())
+          /** Current plaintext value of one field ('' when absent or encrypted). */
+          const cur = (entry: string, field: string): string => {
+            const fm = meta[entry]?.[field]
+            return fm === undefined || fm.enc ? '' : (fm.value ?? '')
+          }
+          const imported: string[] = []
+          const skipped: { id: string; name: string; reason: string }[] = []
+          const failed: { id: string; name: string; reason: string }[] = []
+          const seen = new Set<string>()
+          for (const raw of rawItems) {
+            if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) continue
+            const item = raw as Record<string, unknown>
+            const id = asString(item.id, 200) ?? ''
+            const name = (asString(item.name, 200) ?? '').trim()
+            if (!validateEntryName(name)) {
+              failed.push({ id, name, reason: 'invalid entry name' })
+              continue
+            }
+            if (seen.has(name)) {
+              skipped.push({ id, name, reason: 'duplicate name in this request' })
+              continue
+            }
+            seen.add(name)
+            // The seed is looked up by id on the host: the browser cannot inject one.
+            const entry = seeds.get(id)
+            if (entry === undefined) {
+              skipped.push({ id, name, reason: 'not found in browser storage anymore — rescan' })
+              continue
+            }
+            const judged = judgeEntry(entry, lang)
+            if (!judged.usable || entry.secret === null) {
+              skipped.push({ id, name, reason: judged.reason })
+              continue
+            }
+            const exists = meta[name] !== undefined
+            if (exists && item.overwrite !== true) {
+              skipped.push({ id, name, reason: 'entry already exists (overwrite not requested)' })
+              continue
+            }
+            const url = (asString(item.url, 2000) ?? '').trim()
+            const username = (asString(item.username, 2000) ?? '').trim()
+            const note = (asString(item.note, 2000) ?? '').trim()
+            try {
+              // Non-destructive merge: never blank or replace a field that
+              // already holds something. One `sops set` per field (~0.2 s each).
+              if (url !== '' && (!exists || cur(name, 'url') === '')) await setField(name, 'url', url)
+              if (username !== '' && (!exists || cur(name, 'username') === '')) await setField(name, 'username', username)
+              if (note !== '' && (!exists || cur(name, 'note') === '')) await setField(name, 'note', note)
+              await setField(name, 'totp', entry.secret)
+              imported.push(name)
+              log('import', `${name} (authenticator)`, req)
+            } catch (error) {
+              failed.push({ id, name, reason: String((error as Error | undefined)?.message ?? error).slice(0, 200) })
+            }
+          }
+          send(res, 200, { ok: true, data: { imported, skipped, failed, total: rawItems.length } })
           return
         }
       }

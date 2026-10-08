@@ -44,6 +44,21 @@ export interface ShellRunResultLike {
   exitCode: number | null
   stdout?: CollectedOutputLike
   stderr?: CollectedOutputLike
+  /** Terminating signal, when the process was killed by one. */
+  signal?: string | null
+  /** True when the executor's own deadline cut the run short. */
+  timedOut?: boolean
+  /** True when the caller's AbortSignal cut the run short. */
+  aborted?: boolean
+}
+
+/**
+ * A spawned execution handle (DSH 0.2.x). `result` is a METHOD in the shipped
+ * 0.2 contract (`result(): Promise<ShellRunResult>`); some pre-releases exposed
+ * it as a promise property. Callers must handle both shapes.
+ */
+export interface ShellExecutionLike {
+  result: Promise<ShellRunResultLike> | (() => Promise<ShellRunResultLike>)
 }
 
 /** The slice of the `shell` service this plugin uses. */
@@ -51,8 +66,8 @@ export interface ShellLike {
   resolve(request: ShellExecRequestLike): unknown
   /** DSH 0.1.x foreground seam. */
   run?(spec: unknown): Promise<ShellRunResultLike>
-  /** DSH 0.2.x seam: spawn a handle, then await its `result` projection. */
-  execute?(spec: unknown): Promise<{ result: Promise<ShellRunResultLike> }>
+  /** DSH 0.2.x seam: spawn a handle, then await its `result()` projection. */
+  execute?(spec: unknown): Promise<ShellExecutionLike>
 }
 
 /** Validated plugin config (see `Config` in the entry module). */
@@ -65,4 +80,9 @@ export interface VaultPluginConfig {
   gitBin?: string
   /** Per-command timeout in ms. Default 15000. */
   timeoutMs?: number
+  /**
+   * Extra Chromium user-data root to probe for the Authenticator extension
+   * (import feature). Platform auto-discovery always runs; this only adds one.
+   */
+  browserDataDir?: string
 }
