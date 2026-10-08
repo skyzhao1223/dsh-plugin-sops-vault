@@ -96,7 +96,7 @@ async function readBody(req: IncomingMessage, limit = 64 * 1024): Promise<Record
  *   the Cordis fiber as apply's second argument (NOT `ctx.config` — the Guard
  *   rejects undeclared context property access).
  */
-export function apply(ctx: Context, config?: VaultPluginConfig): void {
+export function apply(ctx: Context, config?: VaultPluginConfig): () => void {
   const cfg = config ?? {}
   const vaultDir = resolveDir(cfg.vaultDir)
   const sopsBin = cfg.sopsBin ?? 'sops'
