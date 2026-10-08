@@ -151,6 +151,9 @@ function rotationWindow(now = Date.now()): number {
   return Math.floor(now / 30_000)
 }
 
+/** Debounce for search-driven re-fetches: typing must not spend a request per character. */
+const CODES_DEBOUNCE_MS = 350
+
 /**
  * Module scope on purpose. The host caps `totp-batch` at 10 requests/min, so
  * remounting this view (toggling the kind chip, closing a drawer) must reuse
@@ -181,6 +184,8 @@ function CodesView({ names, meta, onCopy, onOpen }: CodesViewProps) {
   const [elapsed, setElapsed] = useState(0)
   const fetching = useRef(false)
   const attempted = useRef(-1)
+  /** The first fetch of an instance is immediate; later name changes debounce. */
+  const firstLoad = useRef(true)
   const namesRef = useRef<readonly string[]>(names)
   const dataRef = useRef<TotpBatch | null>(null)
 
@@ -221,7 +226,14 @@ function CodesView({ names, meta, onCopy, onOpen }: CodesViewProps) {
     ).finally(() => { fetching.current = false })
   }, [namesKey])
 
-  useEffect(() => { load(false) }, [load])
+  // fetch once per mount (immediately); a changed name list (search edits)
+  // re-fetches after a short debounce so typing cannot spend a totp-batch
+  // request per character — the host caps the route at 10/min
+  useEffect(() => {
+    if (firstLoad.current) { firstLoad.current = false; load(false); return }
+    const id = window.setTimeout(() => load(false), CODES_DEBOUNCE_MS)
+    return () => window.clearTimeout(id)
+  }, [load])
 
   // one shared ticker for every ring in the list
   useEffect(() => {
@@ -268,6 +280,10 @@ function CodesView({ names, meta, onCopy, onOpen }: CodesViewProps) {
           const fs = meta[n]
           const cd = c === undefined ? null : codeCountdown(c.remain, elapsed)
           const sub = fs === undefined ? '' : entrySubline(fs)
+          // "missing" is what the HOST reported (no usable seed); a name the
+          // current batch simply does not cover yet (search just changed, the
+          // re-fetch is debounced or in flight) shows placeholder dots instead
+          const miss = c === undefined && data.missing.includes(n)
           const copy = (): void => {
             if (c !== undefined) onCopy(c.code, `${n} ${t('totpCopyLabel')}`)
           }
@@ -290,7 +306,8 @@ function CodesView({ names, meta, onCopy, onOpen }: CodesViewProps) {
                   </span>
                   <span className="vp-code-left">{cd.left > 0 ? t('codesLeft', { n: cd.left }) : t('totpRefreshing')}</span>
                 </>
-              ) : <span className="vp-code-miss">{t('codesMissing')}</span>}
+              ) : miss ? <span className="vp-code-miss">{t('codesMissing')}</span>
+                : <span className="vp-code-pending" aria-hidden="true">{'\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7'}</span>}
             </div>
           )
         })}

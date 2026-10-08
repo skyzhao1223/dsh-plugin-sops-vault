@@ -92,6 +92,7 @@ export const CSS = [
   '.vp-code-name:hover{color:var(--dsw-alias-brand-primary,#4c8dff)}',
   '.vp-code-sub{font-size:11px;color:var(--dsw-alias-label-secondary,#98a0b0);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
   '.vp-code-val{font-family:ui-monospace,Menlo,monospace;font-weight:700;font-size:20px;letter-spacing:2.5px;color:var(--dsw-alias-brand-primary,#4c8dff);cursor:pointer;white-space:nowrap}',
+  '.vp-code-pending{font-family:ui-monospace,Menlo,monospace;font-weight:700;font-size:20px;letter-spacing:2.5px;color:var(--dsw-alias-label-secondary,#98a0b0);opacity:.55;white-space:nowrap}',
   '.vp-code-left{font-size:10.5px;color:var(--dsw-alias-label-secondary,#98a0b0);min-width:26px;text-align:right}',
   '.vp-code-miss{font-size:11px;color:var(--dsw-alias-label-secondary,#98a0b0);font-style:italic}',
   '.vp-note{margin-top:13px;font-size:12px;color:var(--dsw-alias-label-secondary,#98a0b0);background:var(--dsw-alias-bg-layer-2,#11141c);border-radius:9px;padding:9px 11px;line-height:1.55;white-space:pre-wrap}',
