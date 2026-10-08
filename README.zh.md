@@ -43,6 +43,9 @@
 
 ## 前置条件
 
+兼容两代 DSH shell 接口：0.1.x 的 `shell.run` 与 0.2.x 的 `shell.execute`+`execution.result`，调用时自动探测。
+
+
 - Node.js `^22.19.0 || >=24.0.0`、pnpm
 - Host PATH 上有 `sops`、`age`、`git`（`brew install sops age`）
 - 一个位于 `~/Vault`（或 `config.vaultDir`）的库仓库——最省事的方式是用 **[sops-vault-kit](https://github.com/skyzhao1223/sops-vault-kit)** 一键生成（`./install.sh`），包含：

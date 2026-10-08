@@ -47,6 +47,9 @@ the model.
 
 ## Prerequisites
 
+Works with both DSH shell generations: `shell.run` (0.1.x) and `shell.execute` + `execution.result` (0.2.x) — feature-detected per call.
+
+
 - Node.js `^22.19.0 || >=24.0.0`, pnpm
 - `sops`, `age`, `git` on the host PATH (`brew install sops age`)
 - A vault repository at `~/Vault` (or `config.vaultDir`) — easiest created by **[sops-vault-kit](https://github.com/skyzhao1223/sops-vault-kit)** (`./install.sh`), containing:

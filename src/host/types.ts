@@ -49,7 +49,10 @@ export interface ShellRunResultLike {
 /** The slice of the `shell` service this plugin uses. */
 export interface ShellLike {
   resolve(request: ShellExecRequestLike): unknown
-  run(spec: unknown): Promise<ShellRunResultLike>
+  /** DSH 0.1.x foreground seam. */
+  run?(spec: unknown): Promise<ShellRunResultLike>
+  /** DSH 0.2.x seam: spawn a handle, then await its `result` projection. */
+  execute?(spec: unknown): Promise<{ result: Promise<ShellRunResultLike> }>
 }
 
 /** Validated plugin config (see `Config` in the entry module). */

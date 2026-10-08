@@ -397,3 +397,21 @@ describe('plugin export shape', () => {
     expect(plugin.Config).toBeDefined()
   })
 })
+
+describe('DSH 0.2 shell seam (execute/result, no run)', () => {
+  it('routes foreground runs through execute() when run() is absent', async () => {
+    const executed: string[] = []
+    const routes: CapturedRoute[] = []
+    const shell = {
+      resolve: (req: { command: string }) => { executed.push(req.command); return { command: req.command } },
+      execute: async () => ({ result: Promise.resolve({ exitCode: 0, stdout: { text: '' }, stderr: { text: '' } }) }),
+    }
+    const webServer = { register: (route: CapturedRoute) => { routes.push(route); return () => {} } }
+    plugin.apply({ shell, webServer } as unknown as Context, { vaultDir: dir })
+    const res = mockRes()
+    await routes[0]!.handler(mockReq('GET', `${API_PATH}/dirty`), res)
+    expect(res.statusCode).toBe(200)
+    expect(res.json().ok).toBe(true)
+    expect(executed.some((c) => c.includes('--porcelain'))).toBe(true)
+  })
+})

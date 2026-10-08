@@ -43,7 +43,7 @@ import {
   validateEntryName,
   validateFieldName,
 } from './host/vault.ts'
-import type { ShellLike, VaultPluginConfig, WebServerLike } from './host/types.ts'
+import type { ShellLike, ShellRunResultLike, VaultPluginConfig, WebServerLike } from './host/types.ts'
 
 /** Cordis function-plugin name. */
 export const name = 'dsh-plugin-sops-vault'
@@ -109,9 +109,20 @@ export function apply(ctx: Context, config?: VaultPluginConfig): void {
     : join(vaultDir, '.audit.log')
   const { shell, webServer } = ctx as unknown as { shell: ShellLike; webServer: WebServerLike }
 
+  /**
+   * Foreground run across both DSH shell generations:
+   * 0.1.x `shell.run(spec)` and 0.2.x `shell.execute(spec)` → `execution.result`.
+   * Feature-detected per call so one published package serves both.
+   */
+  async function runSpec(spec: unknown): Promise<ShellRunResultLike> {
+    if (typeof shell.run === 'function') return await shell.run(spec)
+    if (typeof shell.execute === 'function') return await (await shell.execute(spec)).result
+    throw new Error('host shell service exposes neither run() nor execute()')
+  }
+
   async function run(command: string, ms = timeoutMs): Promise<string> {
     const spec = shell.resolve({ command, workdir: vaultDir, timeoutMs: ms })
-    const r = await shell.run(spec)
+    const r = await runSpec(spec)
     const out = typeof r?.stdout?.text === 'string' ? r.stdout.text : ''
     const err = typeof r?.stderr?.text === 'string' ? r.stderr.text : ''
     if (r?.exitCode !== 0) {
@@ -122,7 +133,7 @@ export function apply(ctx: Context, config?: VaultPluginConfig): void {
 
   async function runOk(command: string, ms = timeoutMs): Promise<number | null> {
     const spec = shell.resolve({ command, workdir: vaultDir, timeoutMs: ms })
-    const r = await shell.run(spec)
+    const r = await runSpec(spec)
     return r?.exitCode ?? null
   }
 
@@ -191,7 +202,7 @@ export function apply(ctx: Context, config?: VaultPluginConfig): void {
     ]
     const command = `${parts[0]} && { ${parts[1]} || { rm -f ${quote(tmp)}; exit 1; }; }`
     const spec = shell.resolve({ command, workdir: vaultDir, timeoutMs: ms })
-    const r = await shell.run(spec)
+    const r = await runSpec(spec)
     if (r?.exitCode !== 0) {
       const err = typeof r?.stderr?.text === 'string' ? r.stderr.text : ''
       throw new Error(`roundtrip failed (exit ${String(r?.exitCode ?? '?')}): ${err.slice(0, 300)}`)
