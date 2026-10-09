@@ -949,6 +949,9 @@ function LogoModal(props: LogoModalProps) {
           <input className="vp-wide" value={kind === 'url' ? value : ''} aria-label={t('logoModeUrl')}
             placeholder="https://…" onChange={(e: ChangeEvent<HTMLInputElement>) => setValue(e.target.value)} />
           <div className="vp-hint" style={{ marginTop: 5 }}>{t('logoUrlHint')}</div>
+          {value.trim() !== '' && kind === 'none' ? (
+            <div className="vp-err" style={{ margin: '7px 0 0' }}>{t('logoInvalid')}</div>
+          ) : null}
           <div className="vp-sec" style={{ marginTop: 13 }}>{t('logoModeUpload')}</div>
           <div className="vp-lm-row">
             <button className="vp-btn" disabled={busy} onClick={() => inputRef.current?.click()}>
@@ -978,7 +981,9 @@ function LogoModal(props: LogoModalProps) {
           ) : null}
         </div>
         <div className="vp-mf">
-          <span className="vp-hint">{t('logoInheritHint')}</span>
+          <span className="vp-hint">
+            {value.trim() !== '' && kind === 'none' ? t('logoInvalid') : t('logoInheritHint')}
+          </span>
           <button className="vp-btn" onClick={props.onClose}>{t('cancel')}</button>
           {props.initial !== '' ? <button className="vp-btn vp-btn-danger" disabled={busy} onClick={() => write('', true)}>{t('logoRemove')}</button> : null}
           <button className="vp-btn vp-btn-pri" disabled={busy || value === props.initial || logoKind(value) === 'none'}

@@ -145,6 +145,7 @@ const ZH = {
   logoSaved: '✓ 已设置 {key} 的 logo',
   logoRemoved: '✓ 已移除 {key} 的 logo',
   logoUploadFail: '读取文件失败',
+  logoInvalid: '无法识别的 logo 值：只支持表情/≤2 字符、位图文件名（png·jpg·gif·webp·ico）、http(s) 网址或 data:image URI；不接受 SVG 和路径',
 } as const
 
 const EN: Record<keyof typeof ZH, string> = {
@@ -283,6 +284,7 @@ const EN: Record<keyof typeof ZH, string> = {
   logoSaved: '✓ Logo set for {key}',
   logoRemoved: '✓ Logo removed for {key}',
   logoUploadFail: 'Could not read that file',
+  logoInvalid: 'Unrecognized logo value: use an emoji or up to 2 characters, a raster file name (png·jpg·gif·webp·ico), an http(s) URL or a data:image URI. SVG and paths are refused.',
 }
 
 export type CopyKey = keyof typeof ZH
