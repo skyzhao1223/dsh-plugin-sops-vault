@@ -13,6 +13,7 @@
 │    · 一键导入浏览器 Authenticator 扩展里的动态码种子                      │
 │    · 按种类筛选：只看动态码的实时验证码视图（像验证器 App）                │
 │    · 两级折叠分组：分组 → 公司 → 条目（三段式名称自动识别）                │
+│    · 分组 / 公司 / 条目三级 logo 配置（表情、上传、网址）                  │
 └──────────────┬─────────────────────────────────────────────────────────┘
                │ 同源 fetch（Origin 校验）
 ┌──────────────▼───────────────┐        ┌──────────────────────────────┐
@@ -67,7 +68,7 @@
 git clone https://github.com/skyzhao1223/dsh-plugin-sops-vault && cd dsh-plugin-sops-vault
 pnpm install
 pnpm build          # tsc（node 半 + 类型）+ tsdown（浏览器 bundle）
-pnpm test           # 102 个单元测试
+pnpm test           # 124 个单元测试
 pnpm verify         # 对构建产物做加载路径验证
 
 dsh web --patch "$PWD/cordis.yml"
@@ -106,6 +107,24 @@ DSH web server 上的一个前缀路由；所有响应都是 `{ok, data|error}` 
 | `/vault-api/audit-log` | GET | 访问日志尾部 |
 | `/vault-api/set` / `rm` / `create` / `save` | POST | 字段写入 / 删除 / 新建条目 / git 提交 |
 | `/vault-api/rename` / `sort` | POST | 重命名单条 / 全库重排序 |
+| `/vault-api/logos` | GET / POST | 读 logo 配置 / 设置或移除一个 logo（`{scope: group\|sub\|entry, key, logo}`） |
+| `/vault-api/logo` | POST | 上传位图到 `<vaultDir>/logos/`（`{name, dataBase64}`） |
+| `/vault-api/logo/<name>` | GET | 图片字节流，给 `<img src>` 用（只允许位图，拒绝路径穿越） |
+
+### 给分组、公司、条目配 logo
+
+`<vaultDir>/logos.json`（明文元数据，和 `systems.md` 一样进 git）把一个分组（`工作`）、一个公司二级段
+（`工作/金山办公`）或一个完整条目名映射到一个 logo 值。**故意放在加密文档之外**：logo 是展示信息不是凭据，
+这样既不用改 `.sops.yaml` 白名单，也不用全库 reencrypt。
+
+值有四种形态：emoji 或 ≤2 个字符（直接当头像画）、`<vaultDir>/logos/` 里的位图文件名（离线可用）、
+`http(s)` 网址、内联 `data:image/...;base64,` URI。条目没配就继承公司的，公司没配就继承分组的。
+重命名条目（或整个公司前缀）会把 logo 一起带走；删除条目会顺手清掉它的 logo。
+
+上传限制 512KB，必须魔数嗅探为 PNG/JPEG/GIF/WebP/ICO，并按嗅探结果存扩展名。**拒绝 SVG**：它作为文档
+从本源打开时能在 vault 自己的源里跑脚本。图片路由还会带 `Content-Security-Policy: default-src 'none';
+sandbox`，并拒绝任何不是纯位图文件名的名字。填网址也能用，但那台主机就会看到你的 IP 和你打开面板的时间
+——输入框旁边有这句提示。
 | `/vault-api/dirty` | GET | git 脏状态 |
 | `/vault-api/import-scan` | GET | 扫描浏览器 Authenticator 扩展里的动态码条目（`?lang=zh|en` 决定原因文案语言） |
 | `/vault-api/import-apply` | POST | 把勾选的条目写进库（`{items:[{id,name,username,url,note,overwrite}]}`） |
@@ -135,6 +154,7 @@ RFC6238 类型（HOTP、Steam、Battle.net）。参数非默认值的条目可�
 | **其他网页源** | 拒绝：任何带跨源或 `null` Origin 头的请求一律 403。无 Origin 的非浏览器本地调用（你自己的 curl）放行——它们和库文件本来就在同一信任域。 |
 | **磁盘** | 库保持 sops 白名单加密。本插件不在任何地方写明文。 |
 | **批量刮取** | `reveal`/`totp` 共享 30 次/分钟滑动窗口限速（内存态）；超出返回 429 并提示“视 GUI 已失陷”。XSS 页面想扫全库会立刻撞墙。 |
+| **logo 配置** | 写操作限速（30 次/分钟）并记审计；图片路由拒绝穿越、只允许位图、上传校验魔数、响应带 sandbox CSP。全程不经手任何密文值。 |
 | **实时验证码视图** | `totp-batch` 在 Host 内存里解密一次（暴露面与既有 `roundtrip` 相同），只返回派生出的 30 秒验证码，**绝不返回种子**。独立 10 次/分钟上限；视图每轮转拉一次，标签页隐藏时暂停。 |
 | **浏览器导入** | 扩展存储只读打开；种子全程留在 Host 侧（API 只传 `secretLen`，绝不传种子），直接落进 sops 加密库。scan/apply 另有 12 次/分钟上限。 |
 
@@ -156,6 +176,7 @@ src/host/vault.ts       纯 vault 逻辑（解析、白名单审计、TOTP、引
 src/host/types.ts       webServer/shell 的结构化类型（不依赖内部包）
 src/host/leveldb.ts     只读 LevelDB 解析器（WAL + SSTable + Snappy）——有单测
 src/host/authenticator.ts  浏览器发现 + Authenticator 条目解析——有单测
+src/host/logos.ts         logo 配置存储（值形态、穿越防护、重命名级联）——有单测
 src/client/index.ts     Client 插件：slots 注册 + 样式
 src/client/VaultPanel.tsx  面板 UI（React 由平台模块表提供）
 src/client/logic.ts     纯 UI 变换 —— 有单测

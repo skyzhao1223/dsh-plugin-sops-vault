@@ -124,6 +124,34 @@ export interface ImportResult {
   total?: number
 }
 
+/** Which level of the name hierarchy a logo belongs to. */
+export type LogoScope = 'group' | 'sub' | 'entry'
+
+/** The whole logo configuration (`<vaultDir>/logos.json`, plaintext metadata). */
+export interface LogoMap {
+  version: number
+  /** Top-level group name -> logo value. */
+  groups: Record<string, string>
+  /** `group/sub` path -> logo value. */
+  subGroups: Record<string, string>
+  /** Full entry name -> logo value. */
+  entries: Record<string, string>
+}
+
+/** `GET logos` payload: the map plus the raster files already uploaded. */
+export interface LogosPayload {
+  logos: LogoMap
+  files: string[]
+}
+
+/** Result of a logo upload. */
+export interface LogoUpload {
+  /** The name actually stored (extension follows the sniffed format). */
+  file: string
+  bytes: number
+  declared: string
+}
+
 /**
  * Call one API route.
  * @param route - sub-route under `/vault-api` (e.g. `meta`).

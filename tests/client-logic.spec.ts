@@ -4,13 +4,14 @@
  */
 import { describe, expect, it } from 'vitest'
 import { entryKinds,
-  chipValues, codeCountdown, countByKind, displayCode, encCount, entrySubline, leafName,
+  chipValues, codeCountdown, countByKind, displayCode, encCount, entrySubline,
+  isEmojiLogo, logoKind, logoLookup, logoSrc, leafName,
   subGroupName, subGroupsOf,
   fieldOrder, groupName, groupEntries, hasKind, hostOf, hueOf, importDefaultNote,
   importSelectable, importSummaryText, importTargetName, isLinkValue, kindsPresent,
   matchEntry, namesOfKind, noteOf, orderGroups, shortName,
 } from '../src/client/logic.ts'
-import type { FieldMeta, ImportEntry, VaultMeta } from '../src/client/api.ts'
+import type { FieldMeta, ImportEntry, LogoMap, VaultMeta } from '../src/client/api.ts'
 import { makeT } from '../src/client/i18n.ts'
 
 const plain = (value: string): FieldMeta => ({ enc: false, value })
@@ -286,5 +287,65 @@ describe('company sub-grouping (3-segment entry names)', () => {
   it('returns a single headerless bucket when nobody has a sub-group', () => {
     expect(subGroupsOf(['个人/PyPI', '个人/Mapbox'])).toEqual([['', ['个人/PyPI', '个人/Mapbox']]])
     expect(subGroupsOf([])).toEqual([])
+  })
+})
+
+describe('logo config', () => {
+  const empty: LogoMap = { version: 1, groups: {}, subGroups: {}, entries: {} }
+
+  it('classifies the four renderable forms and rejects the rest', () => {
+    expect(logoKind('💼')).toBe('text')
+    expect(logoKind('金')).toBe('text')
+    expect(logoKind('wps.png')).toBe('file')
+    expect(logoKind('a-b.1@x.webp')).toBe('file')
+    expect(logoKind('https://x.example/y.png')).toBe('url')
+    expect(logoKind('data:image/png;base64,AAA')).toBe('data')
+    expect(logoKind('')).toBe('none')
+    expect(logoKind(undefined)).toBe('none')
+    expect(logoKind('../evil.png')).toBe('none')
+    expect(logoKind('/abs/x.png')).toBe('none')
+    expect(logoKind('.hidden.png')).toBe('none')
+    expect(logoKind('logo.svg')).toBe('none')
+    expect(logoKind('a/b.png')).toBe('none')
+    expect(logoKind('supercalifragilistic')).toBe('none')
+  })
+
+  it('builds the src: local files go through the host route', () => {
+    expect(logoSrc('wps.png')).toBe('/vault-api/logo/wps.png')
+    expect(logoSrc('a@b_c.1-x.png')).toBe('/vault-api/logo/a%40b_c.1-x.png')
+    // a space is not a legal logo file name on the host either (safeLogoName),
+    // so the client must not try to render it
+    expect(logoSrc('a b.png')).toBe('')
+    expect(logoSrc('https://x/y.png')).toBe('https://x/y.png')
+    expect(logoSrc('data:image/gif;base64,AA')).toBe('data:image/gif;base64,AA')
+    expect(logoSrc('💼')).toBe('')
+    expect(logoSrc('logo.svg')).toBe('')
+  })
+
+  it('looks up entry -> sub-group -> group, and never invents a logo', () => {
+    const map: LogoMap = {
+      version: 1,
+      groups: { '工作': '💼', '个人': '🏠' },
+      subGroups: { '工作/金山办公': 'wps.png' },
+      entries: { '工作/金山办公/sre': '🔒' },
+    }
+    expect(logoLookup(map, 'entry', '工作/金山办公/sre')).toBe('🔒')
+    expect(logoLookup(map, 'entry', '工作/金山办公/ksogit')).toBe('wps.png')
+    expect(logoLookup(map, 'entry', '工作/中化能源/OA')).toBe('💼')
+    expect(logoLookup(map, 'entry', '个人/PyPI')).toBe('🏠')
+    expect(logoLookup(map, 'group', '工作')).toBe('💼')
+    expect(logoLookup(map, 'sub', '工作/中化能源')).toBe('')
+    expect(logoLookup(map, 'entry', '服务/npmjs')).toBe('')
+    expect(logoLookup(null, 'entry', '工作/金山办公/sre')).toBe('')
+    expect(logoLookup(empty, 'group', '工作')).toBe('')
+  })
+
+  it('tells an emoji apart from a letter tile', () => {
+    expect(isEmojiLogo('💼')).toBe(true)
+    expect(isEmojiLogo('⚙️')).toBe(true)
+    expect(isEmojiLogo('金')).toBe(false)
+    expect(isEmojiLogo('W')).toBe(false)
+    expect(isEmojiLogo('AB')).toBe(false)
+    expect(isEmojiLogo('')).toBe(false)
   })
 })

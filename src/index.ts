@@ -22,7 +22,7 @@
  *
  * @module dsh-plugin-sops-vault
  */
-import { appendFileSync, existsSync, readFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -50,6 +50,24 @@ import {
   scanAuthenticator,
   type BrowserRoot,
 } from './host/authenticator.ts'
+import {
+  MAX_UPLOAD_BYTES,
+  listLogoFiles,
+  logoContentType,
+  logoKind,
+  readLogosFile,
+  renameLogos,
+  resolveLogoFile,
+  safeLogoName,
+  serializeLogos,
+  sniffImage,
+  validLogoKey,
+  validateLogoValue,
+  withLogo,
+  writeLogosFile,
+  type LogoMap,
+  type LogoScope,
+} from './host/logos.ts'
 import type { ShellLike, ShellRunResultLike, VaultPluginConfig, WebServerLike } from './host/types.ts'
 
 /** Cordis function-plugin name. */
@@ -84,6 +102,20 @@ function send(res: ServerResponse, code: number, payload: unknown): void {
   res.setHeader('Cache-Control', 'no-store')
   res.setHeader('X-Content-Type-Options', 'nosniff')
   res.end(JSON.stringify(payload))
+}
+
+/**
+ * Raw byte response for the logo file route. The CSP `sandbox` header keeps a
+ * directly-opened image from ever running script in this origin.
+ */
+function sendImage(res: ServerResponse, code: number, type: string, body: Buffer): void {
+  res.statusCode = code
+  res.setHeader('Content-Type', type)
+  res.setHeader('Content-Length', String(body.length))
+  res.setHeader('Cache-Control', 'private, max-age=300')
+  res.setHeader('X-Content-Type-Options', 'nosniff')
+  res.setHeader('Content-Security-Policy', "default-src 'none'; img-src 'self'; sandbox")
+  res.end(body)
 }
 
 async function readBody(req: IncomingMessage, limit = 64 * 1024): Promise<Record<string, unknown>> {
@@ -133,6 +165,8 @@ export function apply(ctx: Context, config?: VaultPluginConfig): () => void {
     browserDataDir === '' ? browserRoots() : [...browserRoots(), { label: 'custom', root: browserDataDir }]
   const secretsFile = join(vaultDir, 'secrets.yaml')
   const sopsConfigFile = join(vaultDir, '.sops.yaml')
+  const logosFile = join(vaultDir, 'logos.json')
+  const logosDir = join(vaultDir, 'logos')
   const logFile = existsSync(join(vaultDir, '.git'))
     ? join(vaultDir, '.git', 'dsh-vault-audit.log')
     : join(vaultDir, '.audit.log')
@@ -223,6 +257,33 @@ export function apply(ctx: Context, config?: VaultPluginConfig): () => void {
    * budget. The 动态码 view polls it once per 30 s rotation (~2/min).
    */
   const allowTotpBatch = limiter(10)
+
+  /** Logo writes: a human decorating the panel, not a loop. */
+  const allowLogoWrite = limiter(30)
+
+  /** Persist the logo map, keeping logos.json out of the way of a git-dirty vault is not
+   *  possible (it is tracked metadata like systems.md) — writes are atomic. */
+  function saveLogos(map: LogoMap): void {
+    writeLogosFile(vaultDir, map)
+  }
+
+  /** Drop the logos of a deleted entry (and of anything under a deleted prefix). */
+  function forgetLogos(name: string): void {
+    try {
+      const map = readLogosFile(vaultDir)
+      const keep = (rec: Record<string, string>): Record<string, string> => {
+        const out: Record<string, string> = {}
+        for (const [k, v] of Object.entries(rec)) {
+          if (k !== name && !k.startsWith(`${name}/`)) out[k] = v
+        }
+        return out
+      }
+      const next: LogoMap = { version: map.version, groups: keep(map.groups), subGroups: keep(map.subGroups), entries: keep(map.entries) }
+      if (serializeLogos(next) !== serializeLogos(map)) saveLogos(next)
+    } catch {
+      /* logo cleanup must never fail a delete */
+    }
+  }
 
   function log(action: string, target: string, req: IncomingMessage): void {
     try {
@@ -326,6 +387,33 @@ export function apply(ctx: Context, config?: VaultPluginConfig): () => void {
           send(res, 200, { ok: true, data: { dirty: out.trim() !== '' } })
           return
         }
+        if (route === 'logos') {
+          send(res, 200, { ok: true, data: { logos: readLogosFile(vaultDir), files: listLogoFiles(vaultDir) } })
+          return
+        }
+        if (route.startsWith('logo/')) {
+          let name: string
+          try {
+            name = decodeURIComponent(route.slice('logo/'.length))
+          } catch {
+            sendImage(res, 404, 'text/plain; charset=utf-8', Buffer.from('bad logo name'))
+            return
+          }
+          const file = resolveLogoFile(logosDir, name)
+          if (file === null || !existsSync(file)) {
+            sendImage(res, 404, 'text/plain; charset=utf-8', Buffer.from('logo not found'))
+            return
+          }
+          let body: Buffer
+          try {
+            body = readFileSync(file)
+          } catch {
+            sendImage(res, 404, 'text/plain; charset=utf-8', Buffer.from('logo unreadable'))
+            return
+          }
+          sendImage(res, 200, logoContentType(name), body)
+          return
+        }
         if (route === 'import-scan') {
           if (!allowImport()) {
             send(res, 429, { ok: false, error: 'import scan rate limit exceeded (12/min)' })
@@ -341,7 +429,9 @@ export function apply(ctx: Context, config?: VaultPluginConfig): () => void {
       }
 
       if (method === 'POST') {
-        const body = await readBody(req)
+        // only the logo upload needs a big body (base64 of a <=512KB image);
+        // every other route keeps the tight 64KB ceiling
+        const body = await readBody(req, route === 'logo' ? 1024 * 1024 : 64 * 1024)
 
         if (route === 'reveal') {
           if (!allowReveal()) {
@@ -412,6 +502,7 @@ export function apply(ctx: Context, config?: VaultPluginConfig): () => void {
           const field = body.field === undefined || body.field === '' ? null : body.field
           if (field !== null && !validateFieldName(field)) throw new Error('rm: invalid field')
           await sops(['unset', '--idempotent', secretsFile, sopsPath(field === null ? ['systems', body.name] : ['systems', body.name, field])])
+          if (field === null) forgetLogos(body.name)
           log('rm', field === null ? body.name : `${body.name}.${field}`, req)
           send(res, 200, { ok: true, data: { removed: field === null ? body.name : `${body.name}.${field}` } })
           return
@@ -455,6 +546,14 @@ export function apply(ctx: Context, config?: VaultPluginConfig): () => void {
           if (meta[body.name] === undefined) throw new Error(`rename: entry not found: ${body.name}`)
           if (meta[body.newName] !== undefined) throw new Error(`rename: target exists, refusing to overwrite: ${body.newName}`)
           await roundtrip('.systems[$n] = .systems[$o] | del(.systems[$o])', ['--arg', 'o', body.name, '--arg', 'n', body.newName])
+          // carry the logo across the rename (and re-root anything underneath it)
+          try {
+            const map = readLogosFile(vaultDir)
+            const moved = renameLogos(map, body.name, body.newName)
+            if (serializeLogos(moved) !== serializeLogos(map)) saveLogos(moved)
+          } catch {
+            /* a lost logo must never fail a rename */
+          }
           log('rename', `${body.name} -> ${body.newName}`, req)
           send(res, 200, { ok: true, data: { renamed: body.newName } })
           return
@@ -466,6 +565,64 @@ export function apply(ctx: Context, config?: VaultPluginConfig): () => void {
           return
         }
 
+        if (route === 'logos') {
+          if (!allowLogoWrite()) {
+            send(res, 429, { ok: false, error: 'logo rate limit exceeded (30/min)' })
+            return
+          }
+          const scope = body.scope
+          if (scope !== 'group' && scope !== 'sub' && scope !== 'entry') {
+            throw new Error("logos: scope must be 'group', 'sub' or 'entry'")
+          }
+          const key = body.key
+          if (!validLogoKey(scope as LogoScope, key)) throw new Error('logos: invalid key for this scope')
+          const value = validateLogoValue(body.logo === undefined ? '' : body.logo)
+          if (value === null) throw new Error('logos: invalid logo value (emoji/≤2 chars, raster file name, http(s) URL or data:image URI)')
+          const kind = logoKind(value)
+          if (kind === 'file' && resolveLogoFile(logosDir, value) === null) throw new Error('logos: unsafe file name')
+          const next = withLogo(readLogosFile(vaultDir), scope as LogoScope, key as string, value)
+          if (next === null) throw new Error('logos: rejected')
+          saveLogos(next)
+          log('logo', `${value === '' ? 'remove' : 'set'} ${scope}:${String(key)}`, req)
+          send(res, 200, { ok: true, data: { saved: { scope, key }, kind } })
+          return
+        }
+        if (route === 'logo') {
+          if (!allowLogoWrite()) {
+            send(res, 429, { ok: false, error: 'logo rate limit exceeded (30/min)' })
+            return
+          }
+          const declared = safeLogoName(body.name)
+          if (declared === null) throw new Error('logo: name must be a bare raster file name (.png/.jpg/.jpeg/.gif/.webp/.ico)')
+          const b64 = body.dataBase64
+          if (typeof b64 !== 'string' || b64 === '') throw new Error('logo: dataBase64 is required')
+          // strip an optional data-URI prefix so both forms upload
+          const payload = b64.replace(/^data:[^;]*;base64,/i, '')
+          if (payload.length * 3 / 4 > MAX_UPLOAD_BYTES) throw new Error(`logo: image too large (max ${String(MAX_UPLOAD_BYTES / 1024)}KB)`)
+          let bytes: Buffer
+          try {
+            bytes = Buffer.from(payload, 'base64')
+          } catch {
+            throw new Error('logo: dataBase64 is not valid base64')
+          }
+          if (bytes.length === 0 || bytes.length > MAX_UPLOAD_BYTES) throw new Error('logo: empty or oversized image')
+          const sniffed = sniffImage(bytes)
+          if (sniffed === null) throw new Error('logo: not a recognized raster image (SVG is refused on purpose)')
+          // store under the REAL format so a mislabelled upload cannot be served
+          // with a wrong content type
+          const stored = `${declared.slice(0, declared.length - declared.split('.').pop()!.length - 1)}${sniffed}`
+          const target = resolveLogoFile(logosDir, stored)
+          if (target === null) throw new Error('logo: unsafe file name')
+          try {
+            mkdirSync(logosDir, { recursive: true })
+          } catch {
+            throw new Error('logo: cannot create the logos directory')
+          }
+          writeFileSync(target, bytes, { mode: 0o644 })
+          log('logo', `upload ${stored} (${String(bytes.length)}B)`, req)
+          send(res, 200, { ok: true, data: { file: stored, bytes: bytes.length, declared } })
+          return
+        }
         if (route === 'import-apply') {
           if (!allowImport()) {
             send(res, 429, { ok: false, error: 'import rate limit exceeded (12/min); if this was not you, treat the GUI as compromised' })

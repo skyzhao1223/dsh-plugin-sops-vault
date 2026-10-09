@@ -13,11 +13,12 @@
 import { createElement, useCallback, useEffect, useRef, useState } from 'react'
 import type { ChangeEvent, KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react'
 import { api } from './api.ts'
-import type { FieldMeta, ImportItem, ImportResult, ImportScan, TotpBatch, TotpResult, VaultMeta } from './api.ts'
+import type { FieldMeta, ImportItem, ImportResult, ImportScan, LogoMap, LogoScope, LogosPayload, LogoUpload, TotpBatch, TotpResult, VaultMeta } from './api.ts'
 import {
   chipValues, codeCountdown, countByKind, displayCode, encCount, entrySubline, fieldOrder, groupEntries,
   hasKind, hueOf, importDefaultNote, importSelectable, importSummaryText, importTargetName,
-  entryKinds, isLinkValue, kindsPresent, leafName, matchEntry, noteOf, shortName, subGroupsOf,
+  entryKinds, isEmojiLogo, isLinkValue, kindsPresent, leafName, logoKind, logoLookup, logoSrc,
+  matchEntry, noteOf, shortName, subGroupsOf,
 } from './logic.ts'
 import type { DataKind } from './logic.ts'
 import { detectLang, makeT } from './i18n.ts'
@@ -63,6 +64,7 @@ const ICONS: Record<string, IconSpec> = {
   check: [['path', { d: 'M20 6L9 17l-5-5' }]],
   sort: [['path', { d: 'M3 6h11' }], ['path', { d: 'M3 12h7' }], ['path', { d: 'M3 18h4' }], ['path', { d: 'M17 7v10' }], ['path', { d: 'M14 14l3 3 3-3' }]],
   import: [['path', { d: 'M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4' }], ['path', { d: 'M7 10l5 5 5-5' }], ['line', { x1: 12, y1: 15, x2: 12, y2: 3 }]],
+  image: [['rect', { x: 3, y: 4, width: 18, height: 16, rx: 2 }], ['circle', { cx: 8.5, cy: 9.5, r: 1.5 }], ['path', { d: 'M21 16l-5-5-6 6-3-3-4 4' }]],
 }
 
 function Glyph({ n, s = 14 }: { n: string; s?: number }) {
@@ -102,6 +104,37 @@ function CountdownRing({ frac, urgent, size = 42 }: { frac: number; urgent: bool
         strokeWidth={3} strokeLinecap="round" strokeDasharray={81.7} strokeDashoffset={81.7 * (1 - frac)}
         transform="rotate(-90 16 16)" style={{ transition: 'stroke-dashoffset 1s linear' }} />
     </svg>
+  )
+}
+
+/* ---------- logo avatar ---------- */
+
+/**
+ * One avatar: a configured logo when there is one, otherwise today's coloured
+ * letter. `file`/`url`/`data` values render as an <img> that falls back to the
+ * letter on error, so a dead link never leaves a hole in the list.
+ */
+function Logo({ value, name, size = 34 }: { value: string; name: string; size?: number }) {
+  const [failed, setFailed] = useState(false)
+  useEffect(() => setFailed(false), [value])
+  const kind = logoKind(value)
+  const img = kind === 'file' || kind === 'url' || kind === 'data' ? logoSrc(value) : ''
+  if (img !== '' && !failed) {
+    return (
+      <img className="vp-logo" src={img} alt="" width={size} height={size} loading="lazy"
+        referrerPolicy="no-referrer" style={{ width: size, height: size }} onError={() => setFailed(true)} />
+    )
+  }
+  const text = kind === 'text' ? value.trim() : leafName(name).slice(0, 1).toUpperCase()
+  // an emoji reads better on a neutral tile; a letter keeps the entry's hue
+  const bg = kind === 'text' && isEmojiLogo(value)
+    ? 'var(--dsw-alias-bg-layer-2,#1b2030)'
+    : `hsl(${String(hueOf(name))},52%,42%)`
+  return (
+    <div className="vp-av" aria-hidden="true"
+      style={{ background: bg, width: size, height: size, fontSize: Math.max(9, Math.round(size * 0.44)) }}>
+      {text}
+    </div>
   )
 }
 
@@ -167,6 +200,7 @@ interface CodesViewProps {
   /** Entry names to show — already filtered by kind and search. */
   names: readonly string[]
   meta: VaultMeta
+  logos: LogoMap | null
   onCopy: (text: string, label: string) => void
   onOpen: (name: string) => void
 }
@@ -178,7 +212,7 @@ interface CodesViewProps {
  * never a per-row timer), one shared 1 s ticker for the rings, and no fetching
  * while the tab is hidden. Codes are derived host-side; seeds never arrive.
  */
-function CodesView({ names, meta, onCopy, onOpen }: CodesViewProps) {
+function CodesView({ names, meta, logos, onCopy, onOpen }: CodesViewProps) {
   const namesKey = [...names].sort().join('\u0000')
   const [data, setData] = useState<TotpBatch | null>(null)
   const [err, setErr] = useState('')
@@ -291,7 +325,7 @@ function CodesView({ names, meta, onCopy, onOpen }: CodesViewProps) {
           }
           return (
             <div key={n} className="vp-code">
-              <div className="vp-av" aria-hidden="true" style={{ background: `hsl(${String(hueOf(n))},52%,42%)` }}>{leafName(n).slice(0, 1).toUpperCase()}</div>
+              <Logo value={logoLookup(logos, 'entry', n)} name={n} />
               <div className="vp-code-main">
                 <div className="vp-code-name" role="button" tabIndex={0} title={n} onClick={() => onOpen(n)}
                   onKeyDown={(e: ReactKeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(n) } }}>
@@ -432,6 +466,9 @@ interface DrawerProps {
   onDeleteField: (n: string, f: string) => void
   onDeleteEntry: (n: string) => void
   onRename: (n: string, nn: string, done: () => void) => void
+  /** Configured logo value for this entry ('' when it inherits or has none). */
+  logo: string
+  onEditLogo: () => void
   onClose: () => void
 }
 
@@ -457,7 +494,7 @@ function Drawer(props: DrawerProps) {
   return (
     <div className="vp-drawer" role="dialog" aria-modal="true" aria-label={n}>
       <div className="vp-dh">
-        <div className="vp-av" aria-hidden="true" style={{ background: `hsl(${String(hueOf(n))},52%,42%)` }}>{short.slice(0, 1).toUpperCase()}</div>
+        <Logo value={props.logo} name={n} />
         <div className="vp-dtitle">
           {renaming ? (
             <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
@@ -480,6 +517,7 @@ function Drawer(props: DrawerProps) {
             </div>
           ) : null}
         </div>
+        <button className="vp-x" title={t('logoEdit')} aria-label={t('logoEdit')} onClick={props.onEditLogo}><Glyph n="image" s={13} /></button>
         <button className="vp-x" title={t('rename')} aria-label={t('rename')} onClick={() => { setNn(n); setRenaming(true) }}><Glyph n="pencil" s={13} /></button>
         <button className="vp-x" ref={closeRef} title={t('closeTitle')} aria-label={t('closeTitle')} onClick={props.onClose}><Glyph n="x" /></button>
       </div>
@@ -822,6 +860,137 @@ function ImportModal({ onClose, onSay, onImported }: { onClose: () => void; onSa
   )
 }
 
+/* ---------- logo editor ---------- */
+
+const EMOJI_PRESETS = ['💼', '🏠', '🧩', '🔐', '🛢', '🐦', '📦', '⚙️', '🚀', '🔧', '🏦', '📊']
+
+interface LogoModalProps {
+  scope: LogoScope
+  /** Group name, `group/sub` path, or full entry name. */
+  keyName: string
+  initial: string
+  files: readonly string[]
+  onClose: () => void
+  onSay: (m: string) => void
+  onSaved: () => void
+}
+
+/**
+ * Set or remove the logo of one group / company / entry. Four ways in: an emoji
+ * or short text, a remote URL, an upload (stored under `<vaultDir>/logos/` and
+ * served same-origin), or picking a file uploaded earlier.
+ */
+function LogoModal(props: LogoModalProps) {
+  const [value, setValue] = useState(props.initial)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+  const inputRef = useRef<HTMLInputElement | null>(null)
+  const kind = logoKind(value)
+
+  const write = (next: string, removed: boolean) => {
+    setBusy(true)
+    setErr('')
+    api<{ saved: unknown }>('logos', { scope: props.scope, key: props.keyName, logo: next }).then(
+      () => {
+        setBusy(false)
+        props.onSay(removed ? t('logoRemoved', { key: props.keyName }) : t('logoSaved', { key: props.keyName }))
+        props.onSaved()
+        props.onClose()
+      },
+      (e: unknown) => { setBusy(false); setErr(String((e as Error | undefined)?.message ?? e).slice(0, 140)) },
+    )
+  }
+
+  const upload = (file: File) => {
+    setBusy(true)
+    setErr('')
+    const reader = new FileReader()
+    reader.onload = () => {
+      const b64 = String(reader.result ?? '').replace(/^data:[^;]*;base64,/, '')
+      api<LogoUpload>('logo', { name: file.name, dataBase64: b64 }).then(
+        (r) => { setBusy(false); setValue(r.file) },
+        (e: unknown) => { setBusy(false); setErr(String((e as Error | undefined)?.message ?? e).slice(0, 140)) },
+      )
+    }
+    reader.onerror = () => { setBusy(false); setErr(t('logoUploadFail')) }
+    reader.readAsDataURL(file)
+  }
+
+  const modes: Array<[string, string]> = [['text', t('logoModeText')], ['url', t('logoModeUrl')]]
+  return (
+    <div className="vp-modal">
+      <div className="vp-backdrop" onClick={props.onClose} />
+      <div className="vp-mbox vp-lm" role="dialog" aria-modal="true" aria-label={t('logoTitle')}>
+        <div className="vp-mh">
+          <span>{t('logoTitle')}</span>
+          <button className="vp-x" aria-label={t('closeTitle')} onClick={props.onClose}><Glyph n="x" s={13} /></button>
+        </div>
+        <div className="vp-mb">
+          <div className="vp-lm-head">
+            <Logo value={value} name={props.keyName} size={44} />
+            <div className="vp-lm-key">
+              <div className="vp-lm-scope">{t(`logoScope_${props.scope}` as CopyKey)}</div>
+              <div className="vp-lm-name" title={props.keyName}>{props.keyName}</div>
+            </div>
+          </div>
+          {err !== '' ? <div className="vp-err" style={{ margin: '9px 0 0' }}>{err}</div> : null}
+          <div className="vp-sec" style={{ marginTop: 13 }}>{modes[0]![1]}</div>
+          <div className="vp-lm-row">
+            <input className="vp-wide" value={kind === 'text' || value === '' ? value : ''} maxLength={8}
+              aria-label={t('logoModeText')} placeholder={t('logoTextPh')}
+              onChange={(e: ChangeEvent<HTMLInputElement>) => setValue(e.target.value)} />
+            <div className="vp-lm-presets">
+              {EMOJI_PRESETS.map((e) => (
+                <button key={e} className="vp-lm-emoji" title={e} aria-label={e} onClick={() => setValue(e)}>{e}</button>
+              ))}
+            </div>
+          </div>
+          <div className="vp-sec" style={{ marginTop: 13 }}>{modes[1]![1]}</div>
+          <input className="vp-wide" value={kind === 'url' ? value : ''} aria-label={t('logoModeUrl')}
+            placeholder="https://…" onChange={(e: ChangeEvent<HTMLInputElement>) => setValue(e.target.value)} />
+          <div className="vp-hint" style={{ marginTop: 5 }}>{t('logoUrlHint')}</div>
+          <div className="vp-sec" style={{ marginTop: 13 }}>{t('logoModeUpload')}</div>
+          <div className="vp-lm-row">
+            <button className="vp-btn" disabled={busy} onClick={() => inputRef.current?.click()}>
+              <Glyph n="import" s={12} />{t('logoPickFile')}
+            </button>
+            <input ref={inputRef} type="file" accept="image/png,image/jpeg,image/gif,image/webp,image/x-icon"
+              style={{ display: 'none' }} aria-label={t('logoModeUpload')}
+              onChange={(e: ChangeEvent<HTMLInputElement>) => {
+                const f = e.target.files?.[0]
+                if (f !== undefined) upload(f)
+                e.target.value = ''
+              }} />
+            <span className="vp-hint">{t('logoUploadHint')}</span>
+          </div>
+          {props.files.length > 0 ? (
+            <>
+              <div className="vp-sec" style={{ marginTop: 13 }}>{t('logoModePick')}</div>
+              <div className="vp-lm-presets">
+                {props.files.map((f) => (
+                  <button key={f} className={`vp-lm-file${value === f ? ' vp-lm-on' : ''}`} title={f}
+                    aria-label={f} onClick={() => setValue(f)}>
+                    <img src={`/vault-api/logo/${encodeURIComponent(f)}`} alt="" width={22} height={22} loading="lazy" referrerPolicy="no-referrer" />
+                  </button>
+                ))}
+              </div>
+            </>
+          ) : null}
+        </div>
+        <div className="vp-mf">
+          <span className="vp-hint">{t('logoInheritHint')}</span>
+          <button className="vp-btn" onClick={props.onClose}>{t('cancel')}</button>
+          {props.initial !== '' ? <button className="vp-btn vp-btn-danger" disabled={busy} onClick={() => write('', true)}>{t('logoRemove')}</button> : null}
+          <button className="vp-btn vp-btn-pri" disabled={busy || value === props.initial || logoKind(value) === 'none'}
+            onClick={() => write(value.trim(), false)}>
+            {busy ? t('logoSaving') : t('save')}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 /* ---------- panel ---------- */
 
 export function VaultPanel() {
@@ -838,6 +1007,9 @@ export function VaultPanel() {
   const [importOpen, setImportOpen] = useState(false)
   const [dirty, setDirty] = useState(false)
   const [stamp, setStamp] = useState('')
+  const [logos, setLogos] = useState<LogoMap | null>(null)
+  const [logoFiles, setLogoFiles] = useState<string[]>([])
+  const [logoEdit, setLogoEdit] = useState<{ scope: LogoScope; key: string } | null>(null)
   const searchRef = useRef<HTMLInputElement | null>(null)
   const toastTimer = useRef(0)
 
@@ -852,8 +1024,17 @@ export function VaultPanel() {
     api<{ dirty: boolean }>('dirty').then((r) => setDirty(r.dirty), () => {})
   }, [])
 
+  /** Logo config is decorative: a failure must never break the panel. */
+  const loadLogos = useCallback(() => {
+    api<LogosPayload>('logos').then(
+      (d) => { setLogos(d?.logos ?? null); setLogoFiles(Array.isArray(d?.files) ? d.files : []) },
+      () => { setLogos((p) => p); setLogoFiles([]) },
+    )
+  }, [])
+
   const load = useCallback(() => {
     setErr('')
+    loadLogos()
     api<VaultMeta>('meta').then(
       (d) => {
         setMeta(d && typeof d === 'object' ? d : {})
@@ -862,7 +1043,7 @@ export function VaultPanel() {
       },
       (e: unknown) => setErr(String((e as Error | undefined)?.message ?? e)),
     )
-  }, [refreshDirty])
+  }, [refreshDirty, loadLogos])
 
   useEffect(() => { load() }, [load])
   useEffect(() => {
@@ -936,6 +1117,7 @@ export function VaultPanel() {
 
   const onKey = (e: ReactKeyboardEvent<HTMLDivElement>) => {
     if (e.key === 'Escape') {
+      if (logoEdit !== null) { setLogoEdit(null); return }
       if (importOpen) { setImportOpen(false); return }
       if (auditOpen) { setAuditOpen(false); return }
       if (newOpen) { setNewOpen(false); return }
@@ -978,7 +1160,7 @@ export function VaultPanel() {
         <div key={n} className={`vp-row${sel === n ? ' vp-sel' : ''}`} role="button" tabIndex={0} aria-label={n}
           onClick={() => setSel(n)}
           onKeyDown={(e: ReactKeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSel(n) } }}>
-          <div className="vp-av" aria-hidden="true" style={{ background: `hsl(${String(hueOf(n))},52%,42%)` }}>{short.slice(0, 1).toUpperCase()}</div>
+          <Logo value={logoLookup(logos, 'entry', n)} name={n} />
           <div className="vp-row-main">
             <div className="vp-row-name" title={n}>{short}</div>
             {entrySubline(fs) ? <div className="vp-row-sub">{entrySubline(fs)}</div> : null}
@@ -1005,17 +1187,22 @@ export function VaultPanel() {
       <div className="vp-body">
         {visible.length === 0 ? (
           <div className="vp-empty">{ql !== '' ? t('noMatch', { q }) : t('kindNone')}</div>
-        ) : <CodesView names={visible} meta={meta} onCopy={onCopy} onOpen={setSel} />}
+        ) : <CodesView names={visible} meta={meta} logos={logos} onCopy={onCopy} onOpen={setSel} />}
       </div>
     ) : (
       <div className="vp-body">
         <div className="vp-sub">{t('subline')}</div>
         {groupEntries(meta, visible, t('groupFallback')).map(([g, names]) => (
           <div key={g}>
-            <button className="vp-gh" aria-expanded={collapsed[g] !== true} onClick={() => setCollapsed((p) => ({ ...p, [g]: !p[g] }))}>
-              <span className={`vp-chev${collapsed[g] === true ? ' vp-chev-c' : ''}`}><Glyph n="chev" s={13} /></span>
-              {g} · {names.length} {t('entriesSuffixGroup')}
-            </button>
+            <div className="vp-gh-row">
+              <button className="vp-gh" aria-expanded={collapsed[g] !== true} onClick={() => setCollapsed((p) => ({ ...p, [g]: !p[g] }))}>
+                <span className={`vp-chev${collapsed[g] === true ? ' vp-chev-c' : ''}`}><Glyph n="chev" s={13} /></span>
+                {logoLookup(logos, 'group', g) !== '' ? <Logo value={logoLookup(logos, 'group', g)} name={g} size={16} /> : null}
+                {g} · {names.length} {t('entriesSuffixGroup')}
+              </button>
+              <button className="vp-ghe" title={t('logoEdit')} aria-label={`${t('logoEdit')} ${g}`}
+                onClick={() => setLogoEdit({ scope: 'group', key: g })}><Glyph n="image" s={11} /></button>
+            </div>
             {collapsed[g] === true ? null : subGroupsOf(names).map(([sub, subNames]) => {
               // second level: 工作 -> 中化能源 / 金山办公. Entries sitting directly
               // under the group (sub === '') render with no sub-header.
@@ -1023,11 +1210,16 @@ export function VaultPanel() {
               return (
                 <div key={skey}>
                   {sub === '' ? null : (
-                    <button className="vp-sh" aria-expanded={collapsed[skey] !== true}
-                      onClick={() => setCollapsed((p) => ({ ...p, [skey]: !p[skey] }))}>
-                      <span className={`vp-chev${collapsed[skey] === true ? ' vp-chev-c' : ''}`}><Glyph n="chev" s={11} /></span>
-                      {sub} · {subNames.length} {t('entriesSuffixGroup')}
-                    </button>
+                    <div className="vp-gh-row vp-sh-row">
+                      <button className="vp-sh" aria-expanded={collapsed[skey] !== true}
+                        onClick={() => setCollapsed((p) => ({ ...p, [skey]: !p[skey] }))}>
+                        <span className={`vp-chev${collapsed[skey] === true ? ' vp-chev-c' : ''}`}><Glyph n="chev" s={11} /></span>
+                        {logoLookup(logos, 'sub', `${g}/${sub}`) !== '' ? <Logo value={logoLookup(logos, 'sub', `${g}/${sub}`)} name={sub} size={14} /> : null}
+                        {sub} · {subNames.length} {t('entriesSuffixGroup')}
+                      </button>
+                      <button className="vp-ghe" title={t('logoEdit')} aria-label={`${t('logoEdit')} ${g}/${sub}`}
+                        onClick={() => setLogoEdit({ scope: 'sub', key: `${g}/${sub}` })}><Glyph n="image" s={11} /></button>
+                    </div>
                   )}
                   {collapsed[skey] === true ? null : <div className="vp-grid">{subNames.map(row)}</div>}
                 </div>
@@ -1086,6 +1278,7 @@ export function VaultPanel() {
         <Drawer name={sel} fields={meta[sel]!} secrets={secrets}
           onReveal={onReveal} onHide={onHide} onCopy={onCopy} onQuickCopy={onQuickCopy}
           onSave={onSave} onDeleteField={onDeleteField} onDeleteEntry={onDeleteEntry} onRename={onRename}
+          logo={logoLookup(logos, 'entry', sel)} onEditLogo={() => setLogoEdit({ scope: 'entry', key: sel })}
           onClose={() => setSel('')} />
       ) : null}
       {auditOpen ? <AuditModal onClose={() => setAuditOpen(false)} /> : null}
@@ -1094,6 +1287,11 @@ export function VaultPanel() {
           onCreated={(nm) => { setNewOpen(false); say(t('created', { name: nm })); load(); setSel(nm) }} />
       ) : null}
       {importOpen ? <ImportModal onClose={() => setImportOpen(false)} onSay={say} onImported={load} /> : null}
+      {logoEdit !== null ? (
+        <LogoModal scope={logoEdit.scope} keyName={logoEdit.key} files={logoFiles}
+          initial={logoLookup(logos, logoEdit.scope, logoEdit.key)}
+          onClose={() => setLogoEdit(null)} onSay={say} onSaved={loadLogos} />
+      ) : null}
       {toast !== '' ? <div className="vp-toast" role="status">{toast}</div> : null}
     </div>
   )

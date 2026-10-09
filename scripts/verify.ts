@@ -9,7 +9,7 @@
  *
  * Run: pnpm build && pnpm verify
  */
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -69,11 +69,15 @@ function mockReq(method: string, url: string, body?: unknown, headers: Record<st
     async *[Symbol.asyncIterator]() { for (const c of chunks) yield c },
   } as unknown as IncomingMessage
 }
-function mockRes(): ServerResponse & { statusCode: number; body: string } {
+function mockRes(): ServerResponse & { statusCode: number; body: string; raw: Buffer; headers: Record<string, string> } {
   return {
-    statusCode: 200, body: '',
-    setHeader() {}, end(s?: string) { this.body = s ?? '' },
-  } as unknown as ServerResponse & { statusCode: number; body: string }
+    statusCode: 200, body: '', raw: Buffer.alloc(0), headers: {},
+    setHeader(k: string, v: string | number) { this.headers[k.toLowerCase()] = String(v) },
+    end(s?: string | Buffer) {
+      this.raw = Buffer.isBuffer(s) ? s : Buffer.from(s ?? '')
+      this.body = Buffer.isBuffer(s) ? '' : (s ?? '')
+    },
+  } as unknown as ServerResponse & { statusCode: number; body: string; raw: Buffer; headers: Record<string, string> }
 }
 
 const handler = route!.handler
@@ -167,6 +171,65 @@ for (const [label, execution] of [
     && JSON.stringify(json.data?.missing) === JSON.stringify(['服务/npmjs'])
     && commands.length - before === 1, res.body.slice(0, 140))
   check('totp-batch never returns the seed', !res.body.includes('JBSWY3DPEHPK3PXP'))
+}
+
+/* ---- logo configuration ---- */
+{
+  const res = mockRes()
+  await handler(mockReq('GET', '/vault-api/logos'), res)
+  const json = JSON.parse(res.body) as ApiResponse
+  check('GET logos starts empty', json.ok === true && JSON.stringify(json.data?.logos?.groups) === '{}')
+}
+{
+  const res = mockRes()
+  await handler(mockReq('POST', '/vault-api/logos', { scope: 'group', key: '工作', logo: '💼' }), res)
+  const json = JSON.parse(res.body) as ApiResponse
+  check('POST logos sets a group emoji', json.ok === true && json.data?.kind === 'text')
+  const res2 = mockRes()
+  await handler(mockReq('GET', '/vault-api/logos'), res2)
+  check('GET logos reflects the write', (JSON.parse(res2.body) as ApiResponse).data?.logos?.groups?.['工作'] === '💼')
+}
+{
+  const res = mockRes()
+  await handler(mockReq('POST', '/vault-api/logos', { scope: 'entry', key: '工作/VPN', logo: 'x.svg' }), res)
+  check('svg logo rejected', res.statusCode === 500 && /raster|emoji/i.test((JSON.parse(res.body) as ApiResponse).error ?? ''))
+  const res2 = mockRes()
+  await handler(mockReq('POST', '/vault-api/logos', { scope: 'group', key: '工作/金山办公', logo: '💼' }), res2)
+  check('group scope rejects a 2-segment key', res2.statusCode === 500)
+}
+{
+  // upload a real PNG, then fetch it back through the file route
+  const png = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex')
+  const res = mockRes()
+  await handler(mockReq('POST', '/vault-api/logo', { name: 'wps.png', dataBase64: png.toString('base64') }), res)
+  const json = JSON.parse(res.body) as ApiResponse
+  check('POST logo uploads a raster', json.ok === true && json.data?.file === 'wps.png', res.body.slice(0, 120))
+  const res2 = mockRes()
+  await handler(mockReq('GET', '/vault-api/logo/wps.png'), res2)
+  check('GET logo/<name> serves it', res2.statusCode === 200 && res2.headers['content-type'] === 'image/png'
+    && res2.raw.length === png.length)
+  const res3 = mockRes()
+  await handler(mockReq('POST', '/vault-api/logo', { name: 'x.png', dataBase64: Buffer.from('<html><script>alert(1)</script>').toString('base64') }), res3)
+  check('non-image upload rejected by magic bytes', res3.statusCode === 500)
+  const res4 = mockRes()
+  await handler(mockReq('GET', '/vault-api/logo/..%2f..%2fsecrets.yaml'), res4)
+  check('logo path traversal refused', res4.statusCode === 404)
+}
+{
+  // a rename carries the logo across (and re-roots keys underneath)
+  await handler(mockReq('POST', '/vault-api/logos', { scope: 'entry', key: '工作/VPN', logo: '🔒' }), mockRes())
+  const res = mockRes()
+  await handler(mockReq('POST', '/vault-api/rename', { name: '工作/VPN', newName: '工作/中化/VPN' }), res)
+  const after = JSON.parse(readFileSync(join(dir, 'logos.json'), 'utf8')) as { entries: Record<string, string> }
+  check('rename cascades the logo key', (JSON.parse(res.body) as ApiResponse).ok === true
+    && after.entries['工作/中化/VPN'] === '🔒' && after.entries['工作/VPN'] === undefined,
+  JSON.stringify(after.entries))
+}
+{
+  // deleting an entry drops its logo
+  await handler(mockReq('POST', '/vault-api/rm', { name: '工作/中化/VPN' }), mockRes())
+  const after = JSON.parse(readFileSync(join(dir, 'logos.json'), 'utf8')) as { entries: Record<string, string> }
+  check('entry delete forgets its logo', after.entries['工作/中化/VPN'] === undefined)
 }
 
 rmSync(dir, { recursive: true, force: true })

@@ -15,6 +15,7 @@ first-class sidebar panel of the DSH Web GUI — with a hard security boundary b
 │    · one-click import of browser Authenticator seeds                   │
 │    · kind filter: a TOTP-only live-codes view (authenticator style)    │
 │    · two-level grouping: group -> company -> entries                   │
+│    · configurable logos per group / company / entry                    │
 │    · access log (values never logged) · zh/en UI                       │
 └──────────────┬─────────────────────────────────────────────────────────┘
                │ same-origin fetch (Origin-checked)
@@ -71,7 +72,7 @@ No other CLI or daemon is required — the plugin drives `sops` and `git` direct
 git clone https://github.com/skyzhao1223/dsh-plugin-sops-vault && cd dsh-plugin-sops-vault
 pnpm install
 pnpm build          # tsc (node half + types) + tsdown (browser bundle)
-pnpm test           # 102 unit tests
+pnpm test           # 124 unit tests
 pnpm verify         # load-path check against the built artifact
 
 dsh web --patch "$PWD/cordis.yml"
@@ -111,6 +112,27 @@ One prefix route on the DSH web server; every response is `{ok, data|error}` JSO
 | `/vault-api/audit-log` | GET | tail of the access log |
 | `/vault-api/set` / `rm` / `create` / `save` | POST | field write / delete / new entry / git commit |
 | `/vault-api/rename` / `sort` | POST | rename one entry / re-sort all entries |
+| `/vault-api/logos` | GET / POST | read the logo config / set or remove one logo (`{scope: group\|sub\|entry, key, logo}`) |
+| `/vault-api/logo` | POST | upload a raster image into `<vaultDir>/logos/` (`{name, dataBase64}`) |
+| `/vault-api/logo/<name>` | GET | the image bytes, for `<img src>` (raster only, traversal-refusing) |
+
+### Logos for groups, companies and entries
+
+`<vaultDir>/logos.json` (plaintext metadata, git-tracked like `systems.md`) maps a group
+(`工作`), a company sub-group (`工作/金山办公`) or a full entry name to one logo value. Logos live
+OUTSIDE the encrypted document on purpose: they are presentation, not credentials, so no
+`.sops.yaml` allowlist change and no vault-wide re-encryption is needed.
+
+A value takes one of four forms — an emoji or ≤2 characters (rendered as the avatar itself), a
+bare raster file name served from `<vaultDir>/logos/` (offline-safe), an `http(s)` URL, or an inline
+`data:image/...;base64,` URI. An entry with no logo inherits its company's, then its group's.
+Renaming an entry (or a whole company prefix) carries its logo across; deleting an entry forgets it.
+
+Uploads are capped at 512 KB, must sniff as PNG/JPEG/GIF/WebP/ICO, and are stored under the sniffed
+extension. **SVG is refused**: served from this origin as a document it could run script in the
+vault's own origin. The file route also sends `Content-Security-Policy: default-src 'none';
+sandbox` and refuses any name that is not a bare raster filename. A remote URL works, but that host
+then sees your IP and when you opened the panel — the UI says so where you enter one.
 | `/vault-api/dirty` | GET | git dirty state |
 | `/vault-api/import-scan` | GET | TOTP entries found in the browser's Authenticator extension (`?lang=zh|en` localizes reasons) |
 | `/vault-api/import-apply` | POST | write the selected entries into the vault (`{items:[{id,name,username,url,note,overwrite}]}`) |
@@ -143,6 +165,7 @@ SHA-1 / 6 digits / 30 s.
 | **Other web origins** | Rejected: any request carrying a cross-origin or `null` `Origin` gets 403. Origin-less callers (your own curl) are allowed — same trust domain as the vault files. |
 | **Disk** | The vault stays sops-encrypted (allowlist mode). The plugin writes no plaintext anywhere. |
 | **Scraping attempts** | `reveal`/`totp` share a 30/min sliding-window rate limit (in-memory); excess gets 429 with a *treat the GUI as compromised* hint. Blunts bulk-scraping by an XSS'd page. |
+| **Logos** | Config writes are rate-limited (30/min) and audit-logged; the image route is traversal-guarded, raster-only, magic-byte verified on upload, and served with a sandboxing CSP. No secret ever travels through it. |
 | **Live-codes view** | `totp-batch` decrypts the vault once in host memory (the same exposure `roundtrip` already has) and returns only derived 30-second codes — never a seed. Its own 10/min ceiling; the view polls once per rotation and pauses while the tab is hidden. |
 | **Browser import** | The extension store is opened read-only; seeds stay host-side (the API carries `secretLen`, never a seed) and land directly in the sops-encrypted vault. Scan+apply share their own 12/min ceiling. |
 
@@ -165,6 +188,7 @@ src/host/vault.ts       pure vault logic (parsing, allowlist audit, TOTP, quotin
 src/host/types.ts       structural types for webServer/shell (no internal deps)
 src/host/leveldb.ts     read-only LevelDB parser (WAL + SSTable + Snappy) — unit-tested
 src/host/authenticator.ts  browser discovery + Authenticator entry parsing — unit-tested
+src/host/logos.ts         logo config store (value forms, traversal guard, rename cascade) — unit-tested
 src/client/index.ts     client plugin: slots registration + styles
 src/client/VaultPanel.tsx  the panel UI (React from the platform module table)
 src/client/logic.ts     pure UI transforms — unit-tested

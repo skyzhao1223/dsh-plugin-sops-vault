@@ -5,7 +5,7 @@
  *
  * @module dsh-plugin-sops-vault/client/logic
  */
-import type { FieldMeta, ImportEntry, VaultMeta } from './api.ts'
+import type { FieldMeta, ImportEntry, LogoMap, LogoScope, VaultMeta } from './api.ts'
 
 /** Deterministic avatar hue from an entry name. */
 export function hueOf(s: string): number {
@@ -158,6 +158,63 @@ export function subGroupsOf(names: readonly string[]): Array<[string, string[]]>
     return a.localeCompare(b)
   })
   return keys.map((k) => [k, subs[k]!] as [string, string[]])
+}
+
+/* ---------- logo configuration ---------- */
+
+/** How a logo value must be rendered. */
+export type LogoKind = 'none' | 'text' | 'file' | 'url' | 'data'
+
+/** Raster file names the host will serve (SVG is refused there on purpose). */
+const LOGO_FILE_RE = /^[\w.@+-]+\.(png|jpe?g|gif|webp|ico)$/i
+
+/**
+ * Classify a logo value. Mirrors `logoKind` in `src/host/logos.ts` so the panel
+ * and the API agree on what is renderable.
+ */
+export function logoKind(value: string | undefined | null): LogoKind {
+  const v = (value ?? '').trim()
+  if (v === '') return 'none'
+  if (v.startsWith('data:image/')) return 'data'
+  if (/^https?:\/\//i.test(v)) return 'url'
+  if (/[\\/]/.test(v) || v.startsWith('.')) return 'none'
+  if (LOGO_FILE_RE.test(v)) return 'file'
+  return [...v].length <= 2 ? 'text' : 'none'
+}
+
+/**
+ * Renderable src for a logo value: local files go through the host route (so
+ * they work offline and never leave the machine), url/data are used verbatim.
+ * '' when there is nothing to render.
+ */
+export function logoSrc(value: string): string {
+  const kind = logoKind(value)
+  if (kind === 'file') return `/vault-api/logo/${encodeURIComponent(value.trim())}`
+  return kind === 'url' || kind === 'data' ? value.trim() : ''
+}
+
+/**
+ * Logo for one scope/key. Entry lookups fall back to the company sub-group and
+ * then to the group, mirroring the host's `logoFor`.
+ */
+export function logoLookup(logos: LogoMap | null, scope: LogoScope, key: string): string {
+  if (logos === null) return ''
+  if (scope === 'group') return logos.groups[key] ?? ''
+  if (scope === 'sub') return logos.subGroups[key] ?? ''
+  const own = logos.entries[key]
+  if (own !== undefined && own !== '') return own
+  const parts = key.split('/')
+  if (parts.length >= 2) {
+    const sub = logos.subGroups[`${parts[0]}/${parts[1]}`]
+    if (sub !== undefined && sub !== '') return sub
+  }
+  return logos.groups[parts[0] ?? ''] ?? ''
+}
+
+/** True when a text logo is an emoji/pictogram rather than a letter. */
+export function isEmojiLogo(value: string): boolean {
+  const v = value.trim()
+  return v !== '' && !/^[A-Za-z0-9\u4e00-\u9fff]{1,2}$/.test(v)
 }
 
 /* ---------- data-kind filtering ("只看某类数据") ---------- */
