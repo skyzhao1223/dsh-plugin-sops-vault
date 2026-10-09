@@ -30,6 +30,8 @@ export const CSS = [
   '.vp-gh{display:flex;align-items:center;gap:6px;margin:17px 2px 9px;font-size:12px;font-weight:600;color:var(--dsw-alias-label-secondary,#98a0b0);cursor:pointer;user-select:none;background:none;border:none;padding:0}',
   '.vp-gh:hover{color:var(--dsw-alias-label-primary,#e8eaf0)}',
   '.vp-chev{transition:transform .18s;display:inline-flex}',
+  '.vp-sh{display:flex;align-items:center;gap:5px;margin:11px 2px 7px 13px;font-size:11.5px;font-weight:600;color:var(--dsw-alias-label-secondary,#98a0b0);cursor:pointer;user-select:none;background:none;border:none;padding:0;opacity:.9}',
+  '.vp-sh:hover{color:var(--dsw-alias-brand-primary,#4c8dff);opacity:1}',
   '.vp-chev-c{transform:rotate(-90deg)}',
   '.vp-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(285px,1fr));gap:9px}',
   '.vp-row{display:flex;align-items:center;gap:10px;background:var(--dsw-alias-bg-layer-1,#181c26);border:1px solid var(--dsw-alias-border-l1,#262c3a);border-radius:11px;padding:9px 12px;cursor:pointer;transition:border-color .15s,transform .12s;text-align:left}',

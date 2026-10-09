@@ -17,7 +17,7 @@ import type { FieldMeta, ImportItem, ImportResult, ImportScan, TotpBatch, TotpRe
 import {
   chipValues, codeCountdown, countByKind, displayCode, encCount, entrySubline, fieldOrder, groupEntries,
   hasKind, hueOf, importDefaultNote, importSelectable, importSummaryText, importTargetName,
-  entryKinds, isLinkValue, kindsPresent, matchEntry, noteOf, shortName,
+  entryKinds, isLinkValue, kindsPresent, leafName, matchEntry, noteOf, shortName, subGroupsOf,
 } from './logic.ts'
 import type { DataKind } from './logic.ts'
 import { detectLang, makeT } from './i18n.ts'
@@ -291,11 +291,11 @@ function CodesView({ names, meta, onCopy, onOpen }: CodesViewProps) {
           }
           return (
             <div key={n} className="vp-code">
-              <div className="vp-av" aria-hidden="true" style={{ background: `hsl(${String(hueOf(n))},52%,42%)` }}>{shortName(n).slice(0, 1).toUpperCase()}</div>
+              <div className="vp-av" aria-hidden="true" style={{ background: `hsl(${String(hueOf(n))},52%,42%)` }}>{leafName(n).slice(0, 1).toUpperCase()}</div>
               <div className="vp-code-main">
                 <div className="vp-code-name" role="button" tabIndex={0} title={n} onClick={() => onOpen(n)}
                   onKeyDown={(e: ReactKeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(n) } }}>
-                  {shortName(n)}
+                  {leafName(n)}
                 </div>
                 {sub !== '' ? <div className="vp-code-sub" title={sub}>{sub}</div> : null}
               </div>
@@ -452,7 +452,7 @@ function Drawer(props: DrawerProps) {
   const url = fs.url && !fs.url.enc ? String(fs.url.value ?? '') : ''
   const chips = chipValues(fs)
   const note = noteOf(fs)
-  const short = shortName(n)
+  const short = leafName(n)
 
   return (
     <div className="vp-drawer" role="dialog" aria-modal="true" aria-label={n}>
@@ -970,7 +970,7 @@ export function VaultPanel() {
     const visible = kind === '' ? matched : matched.filter((n) => hasKind(meta[n]!, kind))
     const row = (n: string) => {
       const fs = meta[n]!
-      const short = shortName(n)
+      const short = leafName(n)
       const urlv = fs.url && !fs.url.enc ? String(fs.url.value ?? '') : ''
       const envv = fs.env && !fs.env.enc ? String(fs.env.value ?? '') : ''
       const enc = encCount(fs)
@@ -1016,7 +1016,23 @@ export function VaultPanel() {
               <span className={`vp-chev${collapsed[g] === true ? ' vp-chev-c' : ''}`}><Glyph n="chev" s={13} /></span>
               {g} · {names.length} {t('entriesSuffixGroup')}
             </button>
-            {collapsed[g] === true ? null : <div className="vp-grid">{names.map(row)}</div>}
+            {collapsed[g] === true ? null : subGroupsOf(names).map(([sub, subNames]) => {
+              // second level: 工作 -> 中化能源 / 金山办公. Entries sitting directly
+              // under the group (sub === '') render with no sub-header.
+              const skey = `${g}\u0000${sub}`
+              return (
+                <div key={skey}>
+                  {sub === '' ? null : (
+                    <button className="vp-sh" aria-expanded={collapsed[skey] !== true}
+                      onClick={() => setCollapsed((p) => ({ ...p, [skey]: !p[skey] }))}>
+                      <span className={`vp-chev${collapsed[skey] === true ? ' vp-chev-c' : ''}`}><Glyph n="chev" s={11} /></span>
+                      {sub} · {subNames.length} {t('entriesSuffixGroup')}
+                    </button>
+                  )}
+                  {collapsed[skey] === true ? null : <div className="vp-grid">{subNames.map(row)}</div>}
+                </div>
+              )
+            })}
           </div>
         ))}
         {visible.length === 0 ? (

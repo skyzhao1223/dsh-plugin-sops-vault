@@ -12,6 +12,7 @@
 │    · TOTP 环形倒计时 · 新建条目 · 安全审计 · 访问日志 · 中英双语          │
 │    · 一键导入浏览器 Authenticator 扩展里的动态码种子                      │
 │    · 按种类筛选：只看动态码的实时验证码视图（像验证器 App）                │
+│    · 两级折叠分组：分组 → 公司 → 条目（三段式名称自动识别）                │
 └──────────────┬─────────────────────────────────────────────────────────┘
                │ 同源 fetch（Origin 校验）
 ┌──────────────▼───────────────┐        ┌──────────────────────────────┐
@@ -66,7 +67,7 @@
 git clone https://github.com/skyzhao1223/dsh-plugin-sops-vault && cd dsh-plugin-sops-vault
 pnpm install
 pnpm build          # tsc（node 半 + 类型）+ tsdown（浏览器 bundle）
-pnpm test           # 95 个单元测试
+pnpm test           # 102 个单元测试
 pnpm verify         # 对构建产物做加载路径验证
 
 dsh web --patch "$PWD/cordis.yml"

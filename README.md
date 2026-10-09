@@ -14,6 +14,7 @@ first-class sidebar panel of the DSH Web GUI — with a hard security boundary b
 │    · live TOTP with countdown ring · entry creation · security audit   │
 │    · one-click import of browser Authenticator seeds                   │
 │    · kind filter: a TOTP-only live-codes view (authenticator style)    │
+│    · two-level grouping: group -> company -> entries                   │
 │    · access log (values never logged) · zh/en UI                       │
 └──────────────┬─────────────────────────────────────────────────────────┘
                │ same-origin fetch (Origin-checked)
@@ -70,7 +71,7 @@ No other CLI or daemon is required — the plugin drives `sops` and `git` direct
 git clone https://github.com/skyzhao1223/dsh-plugin-sops-vault && cd dsh-plugin-sops-vault
 pnpm install
 pnpm build          # tsc (node half + types) + tsdown (browser bundle)
-pnpm test           # 95 unit tests
+pnpm test           # 102 unit tests
 pnpm verify         # load-path check against the built artifact
 
 dsh web --patch "$PWD/cordis.yml"

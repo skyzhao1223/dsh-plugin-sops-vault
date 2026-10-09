@@ -4,7 +4,8 @@
  */
 import { describe, expect, it } from 'vitest'
 import { entryKinds,
-  chipValues, codeCountdown, countByKind, displayCode, encCount, entrySubline,
+  chipValues, codeCountdown, countByKind, displayCode, encCount, entrySubline, leafName,
+  subGroupName, subGroupsOf,
   fieldOrder, groupName, groupEntries, hasKind, hostOf, hueOf, importDefaultNote,
   importSelectable, importSummaryText, importTargetName, isLinkValue, kindsPresent,
   matchEntry, namesOfKind, noteOf, orderGroups, shortName,
@@ -249,5 +250,41 @@ describe('entryKinds (row type badges)', () => {
   })
   it('ignores empty plaintext fields', () => {
     expect(entryKinds({ password: { enc: false, value: '' }, totp: { enc: false, value: '' }, note: { enc: false, value: 'n' } })).toEqual([])
+  })
+})
+
+describe('company sub-grouping (3-segment entry names)', () => {
+  it('reads the second segment as the sub-group', () => {
+    expect(subGroupName('工作/中化能源/OA')).toBe('中化能源')
+    expect(subGroupName('工作/金山办公/sre')).toBe('金山办公')
+    expect(subGroupName('个人/PyPI')).toBe('')
+    expect(subGroupName('裸名')).toBe('')
+    expect(subGroupName('工作/中化能源/子/更深')).toBe('中化能源')
+  })
+
+  it('leafName is what a row shows once its sub-group has a header', () => {
+    expect(leafName('工作/中化能源/OA')).toBe('OA')
+    expect(leafName('个人/PyPI')).toBe('PyPI')
+    expect(leafName('裸名')).toBe('裸名')
+    expect(leafName('工作/中化能源/蓝湖-公用账户1')).toBe('蓝湖-公用账户1')
+  })
+
+  it('buckets a group by company, named sub-groups first and "" last', () => {
+    const names = ['工作/中化能源/OA', '工作/金山办公/sre', '工作/中化能源/堡垒机', '工作/直属条目']
+    const got = subGroupsOf(names)
+    // collation of two CJK names follows the runtime locale, so assert the
+    // bucketing and the ""-last rule rather than a fixed company order
+    expect(got.map(([sub]) => sub).filter(Boolean).sort()).toEqual(['中化能源', '金山办公'].sort())
+    expect(got[got.length - 1]![0]).toBe('')
+    expect(Object.fromEntries(got)).toEqual({
+      '中化能源': ['工作/中化能源/OA', '工作/中化能源/堡垒机'],
+      '金山办公': ['工作/金山办公/sre'],
+      '': ['工作/直属条目'],
+    })
+  })
+
+  it('returns a single headerless bucket when nobody has a sub-group', () => {
+    expect(subGroupsOf(['个人/PyPI', '个人/Mapbox'])).toEqual([['', ['个人/PyPI', '个人/Mapbox']]])
+    expect(subGroupsOf([])).toEqual([])
   })
 })

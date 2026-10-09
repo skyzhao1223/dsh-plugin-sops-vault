@@ -37,6 +37,21 @@ export function shortName(entry: string): string {
   return i > 0 ? entry.slice(i + 1) : entry
 }
 
+/**
+ * Second path segment of a 3+-segment name (`工作/中化能源/OA` -> `中化能源`).
+ * '' when the entry sits directly under its group.
+ */
+export function subGroupName(entry: string): string {
+  const parts = String(entry ?? '').split('/')
+  return parts.length >= 3 ? (parts[1] ?? '').trim() : ''
+}
+
+/** Last path segment — what a row shows once its sub-group has its own header. */
+export function leafName(entry: string): string {
+  const parts = String(entry ?? '').split('/')
+  return (parts[parts.length - 1] ?? entry).trim() || entry
+}
+
 /** Preferred group ordering; unknown groups sort alphabetically after. */
 const GROUP_ORDER = ['工作', '服务', '生活']
 
@@ -123,6 +138,26 @@ export function groupEntries(meta: VaultMeta, visible: readonly string[], fallba
     ;(groups[g] ??= []).push(n)
   }
   return orderGroups(Object.keys(groups)).map((g) => [g, groups[g]!] as [string, string[]])
+}
+
+/**
+ * Split one group's entries into ordered [subGroup, names[]] buckets, so
+ * `工作/中化能源/OA` and `工作/金山办公/sre` fold under their company.
+ * Named sub-groups sort by locale; entries with no sub-group ('') come last and
+ * render without a header.
+ */
+export function subGroupsOf(names: readonly string[]): Array<[string, string[]]> {
+  const subs: Record<string, string[]> = {}
+  for (const n of names) {
+    const s = subGroupName(n)
+    ;(subs[s] ??= []).push(n)
+  }
+  const keys = Object.keys(subs).sort((a, b) => {
+    if (a === '') return 1
+    if (b === '') return -1
+    return a.localeCompare(b)
+  })
+  return keys.map((k) => [k, subs[k]!] as [string, string[]])
 }
 
 /* ---------- data-kind filtering ("只看某类数据") ---------- */
