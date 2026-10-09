@@ -107,9 +107,15 @@ export function parseRawVault(text: string): VaultMeta {
   let entry: string | null = null
   for (const line of text.split('\n')) {
     if (/^sops:\s*$/.test(line)) break
-    const em = /^ {4}([^\s#][^:]*):\s*$/.exec(line)
+    const em = /^ {4}([^\s#].*):\s*$/.exec(line)
     if (em) {
-      entry = em[1]!.trim()
+      let name = em[1]!.trim()
+      // YAML quotes keys containing colons (e.g. "localhost:8080", or URL-style
+      // names from browser imports) — greedy match to the LAST colon, then unwrap.
+      if (name.length >= 2 && ((name.startsWith('"') && name.endsWith('"')) || (name.startsWith(`'`) && name.endsWith(`'`)))) {
+        name = name.slice(1, -1)
+      }
+      entry = name
       rows[entry] = {}
       continue
     }

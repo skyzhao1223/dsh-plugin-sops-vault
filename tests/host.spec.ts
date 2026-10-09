@@ -417,3 +417,22 @@ describe('DSH 0.2 shell seam (execute/result, no run)', () => {
     ;(dispose as unknown as () => void)()
   })
 })
+
+describe('parseRawVault colon names (Chrome-import regression)', () => {
+  it('parses quoted and plain keys containing colons', () => {
+    const yaml = [
+      'systems:',
+      '    "localhost:8080":',
+      '        url: http://localhost:8080',
+      '        password: ENC[AES256_GCM,data:xx,iv:1,tag:1,type:str]',
+      '    测试/带:冒号:',
+      '        note: n',
+      'sops:',
+      '    kms: []',
+    ].join('\n')
+    const meta = parseRawVault(yaml)
+    expect(Object.keys(meta).sort()).toEqual(['localhost:8080', '测试/带:冒号'].sort())
+    expect(meta['localhost:8080']!.password).toEqual({ enc: true })
+    expect(meta['localhost:8080']!.url).toEqual({ enc: false, value: 'http://localhost:8080' })
+  })
+})
