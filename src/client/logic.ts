@@ -137,7 +137,7 @@ export type DataKind = 'totp' | 'password' | 'secret'
 export const DATA_KINDS: readonly DataKind[] = ['totp', 'password', 'secret']
 
 /** Encrypted field names that mean "an API key / token / credential". */
-const SECRET_FIELD_RE = /(token|secret|key|credential|cookie|session|private|passwd|passwd2|apiv3|sign|salt|seed|dsn)/i
+const SECRET_FIELD_RE = /(token|secret|key|credential|cookie|session|private|passwd|pwd|apiv3|sign|salt|seed|dsn|(^|[_-])(ak|sk)([_-]|$))/i
 
 /**
  * Does one entry carry this kind of data?
