@@ -17,7 +17,7 @@ import type { FieldMeta, ImportItem, ImportResult, ImportScan, TotpBatch, TotpRe
 import {
   chipValues, codeCountdown, countByKind, displayCode, encCount, entrySubline, fieldOrder, groupEntries,
   hasKind, hueOf, importDefaultNote, importSelectable, importSummaryText, importTargetName,
-  isLinkValue, kindsPresent, matchEntry, noteOf, shortName,
+  entryKinds, isLinkValue, kindsPresent, matchEntry, noteOf, shortName,
 } from './logic.ts'
 import type { DataKind } from './logic.ts'
 import { detectLang, makeT } from './i18n.ts'
@@ -40,6 +40,8 @@ const MASK = '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022'
 
 /** Chip label of each data kind. */
 const KIND_LABEL: Record<DataKind, CopyKey> = { totp: 'kindTotp', password: 'kindPassword', secret: 'kindSecret' }
+/** Singular labels for per-row type badges. */
+const ROW_KIND_LABEL: Record<DataKind, CopyKey> = { password: 'rowKindPassword', secret: 'rowKindSecret', totp: 'rowKindTotp' }
 
 /* ---------- icons ---------- */
 
@@ -982,6 +984,9 @@ export function VaultPanel() {
             {entrySubline(fs) ? <div className="vp-row-sub">{entrySubline(fs)}</div> : null}
           </div>
           <div className="vp-row-right">
+            {entryKinds(fs).map((k) => (
+              <span key={k} className={`vp-chip vp-kb vp-kb-${k}`}>{t(ROW_KIND_LABEL[k])}</span>
+            ))}
             {envv ? <span className="vp-chip">{envv}</span> : null}
             {enc > 0 ? <span className="vp-lock" title={t('encFieldsTitle', { n: enc })}><Glyph n="key" s={10} />{enc}</span> : null}
             {fs.password && fs.password.enc ? (

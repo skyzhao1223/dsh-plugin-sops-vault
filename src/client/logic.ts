@@ -151,6 +151,15 @@ export function hasKind(fields: Record<string, FieldMeta>, kind: DataKind): bool
   return Object.entries(fields).some(([k, f]) => f.enc && k !== 'totp' && k !== 'password' && SECRET_FIELD_RE.test(k))
 }
 
+/**
+ * Which data kinds one entry carries, in row-badge display order
+ * (password first — the most common question at a glance).
+ */
+export function entryKinds(fields: Record<string, FieldMeta>): DataKind[] {
+  const order: DataKind[] = ['password', 'secret', 'totp']
+  return order.filter((k) => hasKind(fields, k))
+}
+
 /** Entry count per kind, for the chip badges. */
 export function countByKind(meta: VaultMeta): Record<DataKind, number> {
   const out = { totp: 0, password: 0, secret: 0 } as Record<DataKind, number>

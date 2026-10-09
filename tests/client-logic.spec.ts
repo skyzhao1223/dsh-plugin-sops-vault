@@ -3,7 +3,7 @@
  * drive grouping, filtering and field presentation).
  */
 import { describe, expect, it } from 'vitest'
-import {
+import { entryKinds,
   chipValues, codeCountdown, countByKind, displayCode, encCount, entrySubline,
   fieldOrder, groupName, groupEntries, hasKind, hostOf, hueOf, importDefaultNote,
   importSelectable, importSummaryText, importTargetName, isLinkValue, kindsPresent,
@@ -232,5 +232,22 @@ describe('live-code countdown', () => {
     expect(displayCode('12345678')).toBe('12345678')
     expect(displayCode('12345')).toBe('12345')
     expect(displayCode('')).toBe('')
+  })
+})
+
+describe('entryKinds (row type badges)', () => {
+  it('returns kinds in display order for a mixed entry', () => {
+    expect(entryKinds({
+      password: { enc: true },
+      appsecret: { enc: true },
+      totp: { enc: true },
+      url: { enc: false, value: 'https://x' },
+    })).toEqual(['password', 'secret', 'totp'])
+  })
+  it('classifies api-credential entries as secret only', () => {
+    expect(entryKinds({ appid: { enc: false, value: 'wx1' }, appsecret: { enc: true } })).toEqual(['secret'])
+  })
+  it('ignores empty plaintext fields', () => {
+    expect(entryKinds({ password: { enc: false, value: '' }, totp: { enc: false, value: '' }, note: { enc: false, value: 'n' } })).toEqual([])
   })
 })
