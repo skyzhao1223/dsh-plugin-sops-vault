@@ -145,6 +145,9 @@ const ZH = {
   logoSaved: '✓ 已设置 {key} 的 logo',
   logoRemoved: '✓ 已移除 {key} 的 logo',
   logoUploadFail: '读取文件失败',
+  logoInherited: '现在显示的是继承来的 logo（本条目自己没有配）',
+  logoUseInherited: '固定为本条目的',
+  logoTooBig: '图片太大，上限 512KB',
   logoInvalid: '无法识别的 logo 值：只支持表情/≤2 字符、位图文件名（png·jpg·gif·webp·ico）、http(s) 网址或 data:image URI；不接受 SVG 和路径',
 } as const
 
@@ -284,6 +287,9 @@ const EN: Record<keyof typeof ZH, string> = {
   logoSaved: '✓ Logo set for {key}',
   logoRemoved: '✓ Logo removed for {key}',
   logoUploadFail: 'Could not read that file',
+  logoInherited: 'Showing the inherited logo — this entry has none of its own',
+  logoUseInherited: 'Pin it to this entry',
+  logoTooBig: 'Image too large (512KB max)',
   logoInvalid: 'Unrecognized logo value: use an emoji or up to 2 characters, a raster file name (png·jpg·gif·webp·ico), an http(s) URL or a data:image URI. SVG and paths are refused.',
 }
 

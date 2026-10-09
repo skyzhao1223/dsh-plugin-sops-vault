@@ -68,7 +68,7 @@
 git clone https://github.com/skyzhao1223/dsh-plugin-sops-vault && cd dsh-plugin-sops-vault
 pnpm install
 pnpm build          # tsc（node 半 + 类型）+ tsdown（浏览器 bundle）
-pnpm test           # 124 个单元测试
+pnpm test           # 127 个单元测试
 pnpm verify         # 对构建产物做加载路径验证
 
 dsh web --patch "$PWD/cordis.yml"

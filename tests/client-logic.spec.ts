@@ -5,7 +5,7 @@
 import { describe, expect, it } from 'vitest'
 import { entryKinds,
   chipValues, codeCountdown, countByKind, displayCode, encCount, entrySubline,
-  isEmojiLogo, logoKind, logoLookup, logoSrc, leafName,
+  isEmojiLogo, logoInherited, logoKind, logoLookup, logoOwn, logoSrc, leafName,
   subGroupName, subGroupsOf,
   fieldOrder, groupName, groupEntries, hasKind, hostOf, hueOf, importDefaultNote,
   importSelectable, importSummaryText, importTargetName, isLinkValue, kindsPresent,
@@ -347,5 +347,40 @@ describe('logo config', () => {
     expect(isEmojiLogo('W')).toBe(false)
     expect(isEmojiLogo('AB')).toBe(false)
     expect(isEmojiLogo('')).toBe(false)
+  })
+})
+
+describe('logo own vs inherited', () => {
+  const map: LogoMap = {
+    version: 1,
+    groups: { '工作': '💼' },
+    subGroups: { '工作/金山办公': 'wps.png' },
+    entries: { '工作/金山办公/sre': '🔒' },
+  }
+
+  it('logoOwn never inherits, so 移除 cannot offer to delete a logo that is not there', () => {
+    expect(logoOwn(map, 'entry', '工作/金山办公/sre')).toBe('🔒')
+    expect(logoOwn(map, 'entry', '工作/金山办公/ksogit')).toBe('')
+    expect(logoOwn(map, 'sub', '工作/金山办公')).toBe('wps.png')
+    expect(logoOwn(map, 'sub', '工作/中化能源')).toBe('')
+    expect(logoOwn(map, 'group', '工作')).toBe('💼')
+    expect(logoOwn(null, 'entry', '工作/金山办公/sre')).toBe('')
+  })
+
+  it('logoInherited is the company then the group, ignoring the entry itself', () => {
+    expect(logoInherited(map, '工作/金山办公/ksogit')).toBe('wps.png')
+    expect(logoInherited(map, '工作/金山办公/sre')).toBe('wps.png')  // own logo ignored
+    expect(logoInherited(map, '工作/中化能源/OA')).toBe('💼')
+    expect(logoInherited(map, '服务/npmjs')).toBe('')
+    expect(logoInherited(map, '裸名')).toBe('')
+    expect(logoInherited(null, '工作/金山办公/sre')).toBe('')
+  })
+
+  it('logoLookup prefers own, then inherits for entries only', () => {
+    expect(logoLookup(map, 'entry', '工作/金山办公/sre')).toBe('🔒')
+    expect(logoLookup(map, 'entry', '工作/中化能源/OA')).toBe('💼')
+    // a group/sub never inherits from its parent group
+    expect(logoLookup(map, 'sub', '工作/中化能源')).toBe('')
+    expect(logoLookup(map, 'group', '个人')).toBe('')
   })
 })

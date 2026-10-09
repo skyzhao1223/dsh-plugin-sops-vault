@@ -197,18 +197,38 @@ export function logoSrc(value: string): string {
  * Logo for one scope/key. Entry lookups fall back to the company sub-group and
  * then to the group, mirroring the host's `logoFor`.
  */
-export function logoLookup(logos: LogoMap | null, scope: LogoScope, key: string): string {
+/** The bucket one scope stores into. */
+function ownBucket(logos: LogoMap, scope: LogoScope): Record<string, string> {
+  return scope === 'group' ? logos.groups : scope === 'sub' ? logos.subGroups : logos.entries
+}
+
+/** One scope/key's OWN logo value, ignoring inheritance. */
+export function logoOwn(logos: LogoMap | null, scope: LogoScope, key: string): string {
   if (logos === null) return ''
-  if (scope === 'group') return logos.groups[key] ?? ''
-  if (scope === 'sub') return logos.subGroups[key] ?? ''
-  const own = logos.entries[key]
-  if (own !== undefined && own !== '') return own
+  return ownBucket(logos, scope)[key] ?? ''
+}
+
+/**
+ * The logo an entry would inherit (company sub-group, then group), ignoring any
+ * logo of its own. Kept separate from {@link logoLookup} so the editor can tell
+ * "this entry has a logo" apart from "this entry is showing its company's" —
+ * otherwise 移除 would offer to delete something that was never there.
+ */
+export function logoInherited(logos: LogoMap | null, key: string): string {
+  if (logos === null) return ''
   const parts = key.split('/')
   if (parts.length >= 2) {
     const sub = logos.subGroups[`${parts[0]}/${parts[1]}`]
     if (sub !== undefined && sub !== '') return sub
   }
   return logos.groups[parts[0] ?? ''] ?? ''
+}
+
+export function logoLookup(logos: LogoMap | null, scope: LogoScope, key: string): string {
+  if (logos === null) return ''
+  const own = logoOwn(logos, scope, key)
+  if (own !== '') return own
+  return scope === 'entry' ? logoInherited(logos, key) : ''
 }
 
 /** True when a text logo is an emoji/pictogram rather than a letter. */

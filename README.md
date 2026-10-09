@@ -72,7 +72,7 @@ No other CLI or daemon is required — the plugin drives `sops` and `git` direct
 git clone https://github.com/skyzhao1223/dsh-plugin-sops-vault && cd dsh-plugin-sops-vault
 pnpm install
 pnpm build          # tsc (node half + types) + tsdown (browser bundle)
-pnpm test           # 124 unit tests
+pnpm test           # 127 unit tests
 pnpm verify         # load-path check against the built artifact
 
 dsh web --patch "$PWD/cordis.yml"

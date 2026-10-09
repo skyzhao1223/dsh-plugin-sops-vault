@@ -17,7 +17,8 @@ import type { FieldMeta, ImportItem, ImportResult, ImportScan, LogoMap, LogoScop
 import {
   chipValues, codeCountdown, countByKind, displayCode, encCount, entrySubline, fieldOrder, groupEntries,
   hasKind, hueOf, importDefaultNote, importSelectable, importSummaryText, importTargetName,
-  entryKinds, isEmojiLogo, isLinkValue, kindsPresent, leafName, logoKind, logoLookup, logoSrc,
+  entryKinds, isEmojiLogo, isLinkValue, kindsPresent, leafName, logoInherited, logoKind,
+  logoLookup, logoOwn, logoSrc,
   matchEntry, noteOf, shortName, subGroupsOf,
 } from './logic.ts'
 import type { DataKind } from './logic.ts'
@@ -128,7 +129,7 @@ function Logo({ value, name, size = 34 }: { value: string; name: string; size?: 
   const text = kind === 'text' ? value.trim() : leafName(name).slice(0, 1).toUpperCase()
   // an emoji reads better on a neutral tile; a letter keeps the entry's hue
   const bg = kind === 'text' && isEmojiLogo(value)
-    ? 'var(--dsw-alias-bg-layer-2,#1b2030)'
+    ? 'var(--dsw-alias-bg-layer-2,#11141c)'
     : `hsl(${String(hueOf(name))},52%,42%)`
   return (
     <div className="vp-av" aria-hidden="true"
@@ -868,7 +869,10 @@ interface LogoModalProps {
   scope: LogoScope
   /** Group name, `group/sub` path, or full entry name. */
   keyName: string
+  /** This scope's OWN value — never the inherited one, or 移除 would lie. */
   initial: string
+  /** What an entry with no own logo is currently showing, offered as a one-click pin. */
+  inherited: string
   files: readonly string[]
   onClose: () => void
   onSay: (m: string) => void
@@ -901,7 +905,14 @@ function LogoModal(props: LogoModalProps) {
     )
   }
 
+  /** Matches the host's MAX_UPLOAD_BYTES; failing here avoids a pointless read. */
+  const MAX_UPLOAD = 512 * 1024
+
   const upload = (file: File) => {
+    if (file.size > MAX_UPLOAD) {
+      setErr(t('logoTooBig'))
+      return
+    }
     setBusy(true)
     setErr('')
     const reader = new FileReader()
@@ -927,13 +938,19 @@ function LogoModal(props: LogoModalProps) {
         </div>
         <div className="vp-mb">
           <div className="vp-lm-head">
-            <Logo value={value} name={props.keyName} size={44} />
+            <Logo value={value !== '' ? value : props.inherited} name={props.keyName} size={44} />
             <div className="vp-lm-key">
               <div className="vp-lm-scope">{t(`logoScope_${props.scope}` as CopyKey)}</div>
               <div className="vp-lm-name" title={props.keyName}>{props.keyName}</div>
             </div>
           </div>
           {err !== '' ? <div className="vp-err" style={{ margin: '9px 0 0' }}>{err}</div> : null}
+          {value === '' && props.inherited !== '' ? (
+            <div className="vp-lm-row" style={{ marginTop: 9 }}>
+              <span className="vp-hint">{t('logoInherited')}</span>
+              <button className="vp-btn" disabled={busy} onClick={() => setValue(props.inherited)}>{t('logoUseInherited')}</button>
+            </div>
+          ) : null}
           <div className="vp-sec" style={{ marginTop: 13 }}>{modes[0]![1]}</div>
           <div className="vp-lm-row">
             <input className="vp-wide" value={kind === 'text' || value === '' ? value : ''} maxLength={8}
@@ -973,7 +990,7 @@ function LogoModal(props: LogoModalProps) {
                 {props.files.map((f) => (
                   <button key={f} className={`vp-lm-file${value === f ? ' vp-lm-on' : ''}`} title={f}
                     aria-label={f} onClick={() => setValue(f)}>
-                    <img src={`/vault-api/logo/${encodeURIComponent(f)}`} alt="" width={22} height={22} loading="lazy" referrerPolicy="no-referrer" />
+                    <img src={logoSrc(f)} alt="" width={22} height={22} loading="lazy" referrerPolicy="no-referrer" />
                   </button>
                 ))}
               </div>
@@ -1294,7 +1311,8 @@ export function VaultPanel() {
       {importOpen ? <ImportModal onClose={() => setImportOpen(false)} onSay={say} onImported={load} /> : null}
       {logoEdit !== null ? (
         <LogoModal scope={logoEdit.scope} keyName={logoEdit.key} files={logoFiles}
-          initial={logoLookup(logos, logoEdit.scope, logoEdit.key)}
+          initial={logoOwn(logos, logoEdit.scope, logoEdit.key)}
+          inherited={logoEdit.scope === 'entry' ? logoInherited(logos, logoEdit.key) : ''}
           onClose={() => setLogoEdit(null)} onSay={say} onSaved={loadLogos} />
       ) : null}
       {toast !== '' ? <div className="vp-toast" role="status">{toast}</div> : null}
